@@ -1,7 +1,5 @@
 # ============================================
-# LDAP НАСТРОЙКА - WorldSkills Almaty 2026
-# ============================================
-# РУССКАЯ ВЕРСИЯ (для понимания)
+# LDAP НАСТРОЙКА 
 # ============================================
 
 # --------------------------------------------
@@ -83,7 +81,7 @@ ldapsearch -x -b "dc=int,dc=ws,dc=kz" ou
 # --------------------------------------------
 
 # Создаем файл с пользователями
-cat > /tmp/users.ldif << 'EOF'
+nano /tmp/users.ldif
 # Jamie Oliver
 dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
 objectClass: inetOrgPerson
@@ -95,7 +93,7 @@ sn: Oliver
 givenName: Jamie
 displayName: Jamie Oliver
 mail: jamie.oliver@dmz.ws.kz
-userPassword: {CRYPT}Skill39!
+# userPassword: {CRYPT}Skill39!
 uidNumber: 10001
 gidNumber: 5000
 homeDirectory: /home/jamie
@@ -112,7 +110,7 @@ sn: Fox
 givenName: Peter
 displayName: Peter Fox
 mail: peter.fox@dmz.ws.kz
-userPassword: {CRYPT}Skill39!
+# userPassword: {CRYPT}Skill39!
 uidNumber: 10002
 gidNumber: 5000
 homeDirectory: /home/peter
@@ -128,16 +126,22 @@ cn: Administrator
 sn: Administrator
 givenName: Admin
 displayName: Administrator
-userPassword: {CRYPT}Skill39!
+# userPassword: {CRYPT}Skill39!
 uidNumber: 10000
 gidNumber: 5000
 homeDirectory: /home/admin
 loginShell: /bin/bash
-EOF
+
 
 # Добавляем пользователей
 ldapadd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -f /tmp/users.ldif
-# Пароль: Skill39!
+
+# Установить пароль для jamie Password: Skill39!
+ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+# Система спросит:
+# New password: — введи Skill39!
+# Re-enter new password: — повтори Skill39!
+# Повтори для peter и admin.
 
 # --------------------------------------------
 # 6. ПРОВЕРКА ДОБАВЛЕННЫХ ПОЛЬЗОВАТЕЛЕЙ
@@ -165,21 +169,6 @@ ldapwhoami -x -H ldap://localhost -D uid=jamie,ou=Employees,ou=People,dc=int,dc=
 
 # Изменить пароль пользователя
 # ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
-
-# --------------------------------------------
-# 8. СЛУЖЕБНАЯ ЗАПИСЬ ДЛЯ DNS (из задания)
-# --------------------------------------------
-
-# Создаем файл с SRV записью для LDAP
-cat > /tmp/ldap-srv.ldif << 'EOF'
-dn: dc=int,dc=ws,dc=kz
-changetype: modify
-add: description
-description: LDAP server for auth.int.ws.kz
-EOF
-
-# Добавляем (но это для информации, основная SRV запись будет в DNS)
-ldapmodify -x -D cn=admin,dc=int,dc=ws,dc=kz -W -f /tmp/ldap-srv.ldif
 
 # --------------------------------------------
 # 9. ПОЛЕЗНЫЕ КОМАНДЫ ДЛЯ ОТЛАДКИ
@@ -215,7 +204,7 @@ sudo systemctl start slapd
 # --------------------------------------------
 # 11. ШПАРГАЛКА ПО ФОРМАТУ LDIF
 # --------------------------------------------
-: '
+
 # DN (Distinguished Name) - уникальный путь к объекту
 dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
 
@@ -234,4 +223,3 @@ uidNumber: 10001              # UNIX uid
 gidNumber: 5000               # UNIX gid
 homeDirectory: /home/jamie    # домашняя папка
 loginShell: /bin/bash         # шелл
-'

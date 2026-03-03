@@ -1,0 +1,376 @@
+# ============================================
+# CERTIFICATE AUTHORITY (CA) 
+# ============================================
+# All actions on int-srv01
+
+# --------------------------------------------
+# 1. PREPARATION
+# --------------------------------------------
+
+# Install OpenSSL (usually already installed)
+sudo apt update
+sudo apt install -y openssl
+
+# Create CA directory structure
+mkdir -p ~/ca/{root,intermediate,newcerts,certs,crl,private}
+# Alternative (clear):
+# mkdir ~/ca
+# mkdir ~/ca/root
+# mkdir ~/ca/intermediate
+# mkdir ~/ca/newcerts
+# mkdir ~/ca/certs
+# mkdir ~/ca/crl
+# mkdir ~/ca/private
+
+# Go to CA directory
+cd ~/ca
+
+# Set correct permissions (only root can read keys)
+chmod 700 private
+
+# Create service files
+echo '01' > serial
+echo '01' > crlnumber
+touch index.txt
+
+# --------------------------------------------
+# 2. ROOT CERTIFICATE AUTHORITY (ROOT CA)
+# --------------------------------------------
+# Task: Use "WS Root CA" as Common Name (CN)
+
+# Create root CA config file
+nano ~/ca/root-ca.conf
+
+# Insert this content:
+
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+database    = index.txt
+serial      = serial
+certs       = certs
+new_certs_dir = newcerts
+private_key = private/ca.key
+certificate = ca.pem
+default_md  = sha256
+copy_extensions = copy
+
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+x509_extensions = v3_ca
+default_md = sha256
+
+[ req_distinguished_name ]
+CN = WS Root CA
+C = KZ
+ST = Almaty
+L = Almaty
+O = WorldSkills
+OU = CA Department
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:TRUE, pathlen:1
+keyUsage = critical, keyCertSign, cRLSign
+
+
+# Generate root CA private key (4096 bit)
+openssl genrsa -out private/ca.key 4096
+
+# Create self-signed root CA certificate (10 years)
+openssl req -new -x509 -days 3650 -key private/ca.key -out ca.pem -config root-ca.conf
+
+# --------------------------------------------
+# 3. INTERMEDIATE CERTIFICATE AUTHORITY
+# --------------------------------------------
+# Task: Create one intermediate CA
+
+# Create intermediate CA config file
+nano ~/ca/intermediate-ca.conf
+
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+x509_extensions = v3_ca
+default_md = sha256
+
+[ req_distinguished_name ]
+CN = WS Intermediate CA
+C = KZ
+ST = Almaty
+L = Almaty
+O = WorldSkills
+OU = Certificate Services
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+
+[ v3_server ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints = critical, CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = DNS:placeholder
+
+
+# Generate intermediate CA key
+openssl genrsa -out private/intermediate.key 4096
+
+# Create CSR for intermediate CA
+openssl req -new -key private/intermediate.key -out intermediate.csr -config intermediate-ca.conf
+
+# Sign intermediate CA with root CA
+openssl ca -in intermediate.csr -out intermediate.pem -keyfile private/ca.key -cert ca.pem -config <(cat root-ca.conf) -days 1825 -extensions v3_ca
+
+# Combine certificates for chain of trust
+cat intermediate.pem ca.pem > services.pem
+
+# --------------------------------------------
+# 4. WEB SERVER CERTIFICATE
+# --------------------------------------------
+# Task: for www.dmz.ws.kz
+
+# Create web certificate config
+nano ~/ca/web-cert.conf
+
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+default_md = sha256
+
+[ req_distinguished_name ]
+CN = www.dmz.ws.kz
+C = KZ
+ST = Almaty
+L = Almaty
+O = WorldSkills
+OU = Web Servers
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = www.dmz.ws.kz
+DNS.2 = dmz.ws.kz
+
+# Generate web server key
+openssl genrsa -out private/web.key 2048
+
+# Create CSR
+openssl req -new -key private/web.key -out web.csr -config web-cert.conf
+
+# Sign web certificate with intermediate CA (answer y when prompted)
+openssl ca -in web.csr -out web.pem -keyfile private/intermediate.key -cert intermediate.pem -config intermediate-ca.conf -extensions v3_req -days 365
+
+# --------------------------------------------
+# 5. MAIL SERVER CERTIFICATE
+# --------------------------------------------
+# Task: for mail.dmz.ws.kz
+
+# Create mail certificate config
+nano ~/ca/mail-cert.conf
+
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+default_md = sha256
+
+[ req_distinguished_name ]
+CN = mail.dmz.ws.kz
+C = KZ
+ST = Almaty
+L = Almaty
+O = WorldSkills
+OU = Mail Servers
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = mail.dmz.ws.kz
+DNS.2 = dmz.ws.kz
+
+# Generate mail server key
+openssl genrsa -out private/mail.key 2048
+
+# Create CSR
+openssl req -new -key private/mail.key -out mail.csr -config mail-cert.conf
+
+# Sign mail certificate with intermediate CA
+openssl ca -in mail.csr -out mail.pem -keyfile private/intermediate.key -cert intermediate.pem -config intermediate-ca.conf -extensions v3_req -days 365
+
+# View certificate
+openssl x509 -in mail.pem -text -noout | grep -E "Subject:|DNS:"
+
+# --------------------------------------------
+# 6. CRL (CERTIFICATE REVOCATION LIST) AND AIA/CDP FIELDS
+# --------------------------------------------
+# Task: certificates must contain AIA and CDP fields
+
+# Create CA config with AIA/CDP support
+nano ~/ca/ca-with-crl.conf
+
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+database    = /home/user/ca/index.txt
+serial      = /home/user/ca/serial
+certs       = /home/user/ca/certs
+new_certs_dir = /home/user/ca/newcerts
+private_key = /home/user/ca/private/intermediate.key
+certificate = /home/user/ca/intermediate.pem
+default_md  = sha256
+copy_extensions = copy
+policy      = policy_loose
+email_in_dn = optional
+default_crl_days = 30
+
+[ policy_loose ]
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
+
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+x509_extensions = v3_ca
+default_md = sha256
+
+[ req_distinguished_name ]
+CN = WS Intermediate CA
+C = KZ
+ST = Almaty
+L = Almaty
+O = WorldSkills
+OU = Certificate Services
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+authorityInfoAccess = caIssuers;URI:http://ca.dmz.ws.kz/services.pem
+crlDistributionPoints = URI:http://ca.dmz.ws.kz/crl.pem
+
+[ v3_server ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+authorityInfoAccess = caIssuers;URI:http://ca.dmz.ws.kz/services.pem
+crlDistributionPoints = URI:http://ca.dmz.ws.kz/crl.pem
+subjectAltName = DNS:placeholder
+
+
+# Generate CRL
+openssl ca -gencrl -out crl/crl.pem -config ca-with-crl.conf
+
+# View CRL
+openssl crl -in crl/crl.pem -text -noout
+
+# Re-sign web certificate with CRL support
+openssl ca -in web.csr -out web-with-crl.pem -keyfile private/intermediate.key -cert intermediate.pem -config ca-with-crl.conf -extensions v3_server -days 365
+
+# Re-sign mail certificate with CRL support
+openssl ca -in mail.csr -out mail-with-crl.pem -keyfile private/intermediate.key -cert intermediate.pem -config ca-with-crl.conf -extensions v3_server -days 365
+
+# Rename new versions as main
+cp web-with-crl.pem web.pem
+cp mail-with-crl.pem mail.pem
+
+# --------------------------------------------
+# 7. PUBLISH IN /opt/grading/ca
+# --------------------------------------------
+# Task: copy of each certificate in /opt/grading/ca
+
+# Create target directory
+sudo mkdir -p /opt/grading/ca
+
+# Copy all certificates
+sudo cp ~/ca/ca.pem /opt/grading/ca/
+sudo cp ~/ca/services.pem /opt/grading/ca/
+sudo cp ~/ca/web.pem /opt/grading/ca/
+sudo cp ~/ca/mail.pem /opt/grading/ca/
+sudo cp ~/ca/crl/crl.pem /opt/grading/ca/
+
+# Check result
+ls -la /opt/grading/ca/
+
+# --------------------------------------------
+# 8. CERTIFICATE VERIFICATION
+# --------------------------------------------
+
+# Check root certificate
+openssl x509 -in /opt/grading/ca/ca.pem -text -noout | grep -E "Subject:|Issuer:|CA:"
+
+# Check web certificate
+openssl x509 -in /opt/grading/ca/web.pem -text -noout | grep -E "Subject:|Issuer:|DNS:"
+
+# Check chain of trust
+openssl verify -CAfile /opt/grading/ca/ca.pem /opt/grading/ca/web.pem
+
+# --------------------------------------------
+# 9. USEFUL DEBUGGING COMMANDS
+# --------------------------------------------
+
+# View certificate content
+openssl x509 -in certificate.pem -text -noout
+
+# Check private key
+openssl rsa -in private/keyfile.key -check
+
+# Create PFX format (for Windows)
+# openssl pkcs12 -export -out cert.pfx -inkey private/web.key -in web.pem -certfile ca.pem
+
+# --------------------------------------------
+# 10. COMMON ERRORS & SOLUTIONS
+# --------------------------------------------
+
+# ERROR: unable to load private key
+# FIX: check permissions (chmod 600 private)
+
+# ERROR: signature algorithm mismatch
+# FIX: check default_md in configs (must be sha256)
+
+# ERROR: certificate verification failed
+# FIX: check chain - intermediate must be signed by root
+
+# --------------------------------------------
+# 11. QUICK REFERENCE
+# --------------------------------------------
+
+# CA (Certificate Authority) - certification center
+#   Root CA - self-signed
+#   Intermediate CA - signed by root
+
+# PEM - certificate format (text, starts with -----BEGIN CERTIFICATE-----)
+# KEY - private key (-----BEGIN PRIVATE KEY-----)
+# CSR - certificate request (-----BEGIN CERTIFICATE REQUEST-----)
+
+# Certificate fields:
+#   CN (Common Name) - main name (www.dmz.ws.kz)
+#   SAN (Subject Alternative Name) - additional names
+#   AIA (Authority Info Access) - where to download CA certificate
+#   CDP (CRL Distribution Points) - where to download CRL
+
+# Validity:
+#   Root CA - 10 years (3650 days)
+#   Intermediate - 5 years (1825 days)
+#   Server - 1 year (365 days)
