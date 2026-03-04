@@ -84,7 +84,7 @@ ldapsearch -x -b "dc=int,dc=ws,dc=kz" ou
 nano /tmp/users.ldif
 
 # Copy this content into nano:
-: '
+
 # Jamie Oliver
 dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
 objectClass: inetOrgPerson
@@ -134,7 +134,6 @@ uidNumber: 10000
 gidNumber: 5000
 homeDirectory: /home/admin
 loginShell: /bin/bash
-'
 
 # Add users (without passwords)
 ldapadd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -f /tmp/users.ldif
@@ -212,8 +211,6 @@ sudo systemctl start slapd
 # --------------------------------------------
 # 10. LDIF QUICK REFERENCE
 # --------------------------------------------
-
-: '
 # DN - Distinguished Name (unique path)
 dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
 
