@@ -1,0 +1,473 @@
+# ============================================
+# 1. NETWORK AND DNS SETUP 
+# ============================================
+# All actions on all VMs (as specified)
+
+# --------------------------------------------
+# HOSTNAME
+# --------------------------------------------
+hostnamectl set-hostname new_name
+# check
+hostname
+
+# --------------------------------------------
+# 1. NETWORK INTERFACE CONFIGURATION
+# --------------------------------------------
+# Task: Configure static IPv4 and IPv6 addresses according to Table 1
+
+# On each VM, check interface names
+ip a
+
+# Edit network configuration
+sudo nano /etc/network/interfaces
+
+# ==================== fw.ws.kz ====================
+# INT interface (10.1.10.1/24 + IPv6)
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.10.1
+    netmask 255.255.255.0
+iface enp0s3 inet6 static
+    address 2001:db8:1001:10::1/64
+
+# DMZ interface (10.1.20.1/24 + IPv6)
+auto enp0s8
+iface enp0s8 inet static
+    address 10.1.20.1
+    netmask 255.255.255.0
+iface enp0s8 inet6 static
+    address 2001:db8:1001:20::1/64
+
+# WAN interface (1.1.1.10/24 + IPv6) - default gateway HERE ONLY
+auto enp0s9
+iface enp0s9 inet static
+    address 1.1.1.10
+    netmask 255.255.255.0
+iface enp0s9 inet6 static
+    address 2001:db8:1111::10/64
+
+# Gateway interface	
+auto enp0s10
+iface enp0s10 inet dhcp
+
+# ==================== int-srv01.int.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.10.10
+    netmask 255.255.255.0
+    gateway 10.1.10.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:10::10/64
+	
+
+# ==================== mail.dmz.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.20.10
+    netmask 255.255.255.0
+    gateway 10.1.20.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::10/64
+
+# ==================== ha-prx01.dmz.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.20.21
+    netmask 255.255.255.0
+    gateway 10.1.20.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::21/64
+
+# ==================== ha-prx02.dmz.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.20.22
+    netmask 255.255.255.0
+    gateway 10.1.20.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::22/64
+
+# ==================== web01.dmz.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.20.31
+    netmask 255.255.255.0
+    gateway 10.1.20.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::31/64
+
+# ==================== web02.dmz.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 10.1.20.32
+    netmask 255.255.255.0
+    gateway 10.1.20.1
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::32/64
+
+# ==================== jamie-ws01.ext.ws.kz ====================
+auto lo
+iface lo inet loopback
+
+auto enp0s3
+iface enp0s3 inet static
+    address 1.1.1.20
+    netmask 255.255.255.0
+    gateway 1.1.1.10
+iface enp0s3 inet6 static
+    address 2001:db8:1111::20/64
+
+# --------------------------------------------
+# APPLY NETWORK CONFIGURATION
+# --------------------------------------------
+# Restart networking on each VM after editing
+sudo systemctl restart networking
+
+# Verify configuration
+ip a
+ip route
+ip -6 route
+
+# Test connectivity (from each VM)
+ping 10.1.10.1          # ping to fw from INT/DMZ
+ping 1.1.1.10           # ping to fw WAN
+
+
+
+# --------------------------------------------
+# 2. DNS SERVER (BIND9) ON int-srv01
+# --------------------------------------------
+# Task: Create int.ws.kz zone, reverse zones, SRV record for LDAP
+
+# Install BIND9
+sudo apt update
+sudo apt install -y bind9 bind9utils
+
+# Check service status
+sudo systemctl status bind9
+
+# --------------------------------------------
+# 2.1 Configure zones
+# --------------------------------------------
+sudo nano /etc/bind/named.conf.local
+
+# Add these lines:
+zone "int.ws.kz" {
+    type master;
+    file "/etc/bind/db.int.ws.kz";
+};
+
+zone "10.1.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.10.1.10";
+};
+
+# --------------------------------------------
+# 2.2 Create forward zone file
+# --------------------------------------------
+sudo nano /etc/bind/db.int.ws.kz
+
+$TTL    604800
+@       IN      SOA     int-srv01.int.ws.kz. admin.int.ws.kz. (
+                              2026030501   ; Serial (YYYYMMDDNN)
+                              604800       ; Refresh
+                              86400        ; Retry
+                              2419200      ; Expire
+                              604800 )     ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      int-srv01.int.ws.kz.
+
+; A records (IPv4)
+int-srv01       IN      A       10.1.10.10
+fw              IN      A       10.1.10.1
+
+; SRV record for LDAP (REQUIRED by task)
+_ldap._tcp      IN      SRV     10 50 389 auth.int.ws.kz.
+auth            IN      CNAME   int-srv01.int.ws.kz.
+
+# --------------------------------------------
+# 2.3 Create reverse zone file
+# --------------------------------------------
+sudo nano /etc/bind/db.10.1.10
+
+$TTL    604800
+@       IN      SOA     int-srv01.int.ws.kz. admin.int.ws.kz. (
+                              2026030501   ; Serial
+                              604800       ; Refresh
+                              86400        ; Retry
+                              2419200      ; Expire
+                              604800 )     ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      int-srv01.int.ws.kz.
+
+; PTR records (reverse)
+10      IN      PTR     int-srv01.int.ws.kz.
+1       IN      PTR     fw.int.ws.kz.
+
+# --------------------------------------------
+# 2.4 Enable recursion (for clients)
+# --------------------------------------------
+sudo nano /etc/bind/named.conf.options
+
+options {
+    directory "/var/cache/bind";
+    
+    # Enable recursion for internal networks
+    recursion yes;
+    allow-query { any; };
+    allow-recursion { 127.0.0.1; 10.1.10.0/24; 10.1.20.0/24; };
+    allow-query-cache { 127.0.0.1; 10.1.10.0/24; 10.1.20.0/24; };
+    
+    # Listen on all interfaces
+    listen-on { any; };
+    listen-on-v6 { any; };
+    
+    # Forwarders (optional, for external resolution)
+    forwarders {
+        8.8.8.8;
+        8.8.4.4;
+    };
+};
+
+# resolve your own name
+sudo nano /etc/hosts
+# Add the line:
+10.1.10.10    int-srv01.int.ws.kz    int-srv01
+
+# --------------------------------------------
+# 2.5 Verify and restart
+# --------------------------------------------
+# Check configuration syntax
+sudo named-checkconf
+
+# Check zone files
+sudo named-checkzone int.ws.kz /etc/bind/db.int.ws.kz
+sudo named-checkzone 10.1.10.in-addr.arpa /etc/bind/db.10.1.10
+
+# Restart BIND9
+sudo systemctl restart bind9
+
+# --------------------------------------------
+# 2.6 Test DNS resolution
+# --------------------------------------------
+# Local test (on int-srv01)
+dig @localhost int-srv01.int.ws.kz
+dig @localhost -x 10.1.10.10
+dig @localhost _ldap._tcp.int.ws.kz SRV
+
+# Remote test (from fw.ws.kz or any other VM)
+# Install dnsutils if needed: sudo apt install dnsutils -y
+dig @10.1.10.10 int-srv01.int.ws.kz
+nslookup 10.1.10.10 10.1.10.10
+dig @10.1.10.10 _ldap._tcp.int.ws.kz SRV
+nslookup google.com 10.1.10.10
+
+# ============================================
+# ROUTING ON FW.WS.KZ 
+# ============================================
+
+# Enable IP forwarding (if not already done)
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo sysctl -w net.ipv6.conf.all.forwarding=1
+
+# Make permanent
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+echo "net.ipv6.conf.all.forwarding=1" | sudo tee -a /etc/sysctl.conf
+
+Disabling nftables (temporarily)
+sudo systemctl stop nftables
+sudo systemctl disable nftables
+
+# Checking the default route
+user@jamie-ws01:~$ ip route | grep default
+default via 1.1.1.10 dev enp0s3 onlink
+default via 192.168.0.1 dev enp0s8 proto dhcp src 192.168.0.114 metric 100
+
+# If you need internet
+user@jamie-ws01:~$ sudo ip route del default via 1.1.1.10 dev enp0s3
+
+user@jamie-ws01:~$ ip route | grep default
+default via 192.168.0.1 dev enp0s8 proto dhcp src 192.168.0.114 metric 100
+
+# If you need an internal network
+user@jamie-ws01:~$ sudo ip route add default via 1.1.1.10 dev enp0s3
+user@jamie-ws01:~$ ip route | grep default
+default via 1.1.1.10 dev enp0s3
+default via 192.168.0.1 dev enp0s8 proto dhcp src 192.168.0.114 metric 100
+
+
+
+# ============================================
+# NFTABLES ON FW.WS.KZ 
+# ============================================
+# All actions on fw.ws.kz
+
+# Enable and start
+sudo systemctl enable nftables
+sudo systemctl start nftables
+
+# Clear any existing rules
+sudo nft flush ruleset
+
+# --------------------------------------------
+# 3. CREATE NFTABLES CONFIGURATION FILE
+# --------------------------------------------
+sudo nano /etc/nftables.conf
+Copy and paste the entire ruleset below:
+
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet filter {
+	chain input {
+		type filter hook input priority filter;
+	}
+	chain forward {
+		type filter hook forward priority filter;
+	}
+	chain output {
+		type filter hook output priority filter;
+	}
+}
+
+# --------------------------------------------
+# 4. APPLY RULES
+# --------------------------------------------
+# Check syntax (no output means OK)
+sudo nft -c -f /etc/nftables.conf
+
+# Apply rules
+sudo nft -f /etc/nftables.conf
+
+# Verify
+sudo nft list ruleset
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅ Абсолютно верно!
+fw.ws.kz выполняет две роли:
+
+Маршрутизатор между INT, DMZ, WAN (1.1.1.0/24) и gateway (172.16.0.0/24)
+
+Шлюз для локальных сетей — все запросы в интернет от INT/DMZ идут через fw.ws.kz, а он отправляет их дальше на gateway
+
+🧠 Как это работает
+text
+Локальные сети         fw.ws.kz           gateway          Интернет
+int-srv01 (10.1.10.10)  ──>  enp0s3 ──>           ──> enp0s10 ──> 172.16.0.1 ──> (NAT) ──> 8.8.8.8
+mail.dmz   (10.1.20.10)  ──>  enp0s8 ──>           ──> enp0s10 ──> 172.16.0.1 ──> (NAT) ──> 8.8.8.8
+fw.ws.kz получает пакет от int-srv01 с адресом 8.8.8.8
+
+Смотрит маршрут: default via 172.16.0.1 dev enp0s10
+
+Отправляет пакет на gateway
+
+gateway делает NAT и отправляет в интернет
+
+✅ Минимальная настройка fw.ws.kz для этого
+1. Убедиться, что IP forwarding включён
+bash
+sudo sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+2. Настроить интерфейсы (у тебя уже есть)
+bash
+# enp0s3 (INT), enp0s8 (DMZ), enp0s9 (WAN по заданию), enp0s10 (gateway)
+3. Временно отключить nftables для теста
+bash
+sudo systemctl stop nftables
+4. Проверить
+bash
+# С int-srv01
+ping 8.8.8.8 -c 2   # должно работать
+
+
+
+
+
+
+
+🔥 Правильные правила nftables для этой схемы
+bash
+# Таблица NAT (только для проброса портов с enp0s9, как в задании)
+table ip nat {
+    chain prerouting {
+        type nat hook prerouting priority -100; policy accept;
+        iif enp0s9 tcp dport 80 dnat to 10.1.20.20
+        iif enp0s9 tcp dport 443 dnat to 10.1.20.20
+        iif enp0s9 udp dport 53 dnat to 10.1.20.21
+        iif enp0s9 udp dport 53 dnat to 10.1.20.22
+        iif enp0s9 tcp dport 53 dnat to 10.1.20.21
+        iif enp0s9 tcp dport 53 dnat to 10.1.20.22
+    }
+    # MASQUERADE НЕ НУЖЕН — его делает gateway
+}
+
+# Таблица фильтрации (разрешить маршрутизацию)
+table ip filter {
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        ct state { established, related } accept
+
+        # Разрешить INT -> DMZ
+        iif enp0s3 oif enp0s8 accept
+        # Разрешить DMZ -> INT
+        iif enp0s8 oif enp0s3 accept
+
+        # Разрешить INT -> WAN (интернет через gateway)
+        iif enp0s3 oif enp0s10 accept
+        # Разрешить DMZ -> WAN (интернет через gateway)
+        iif enp0s8 oif enp0s10 accept
+
+        # Разрешить ответы из интернета обратно
+        iif enp0s10 oif { enp0s3, enp0s8 } ct state established,related accept
+
+        # Разрешить почтовику доступ к LDAP
+        iif enp0s8 ip saddr 10.1.20.10 oif enp0s3 ip daddr 10.1.10.10 tcp dport 389 accept
+
+        log prefix "FW-FORWARD-DROP: " drop
+    }
+}
+📌 Итог
+Назначение	Интерфейс	Роль
+INT	enp0s3	локальная сеть
+DMZ	enp0s8	локальная сеть
+WAN (задание)	enp0s9	проброс портов
+Gateway	enp0s10	выход в интернет
