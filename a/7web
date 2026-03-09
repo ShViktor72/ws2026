@@ -1,0 +1,541 @@
+--------------------------------------------
+5. WEB SERVERS CONFIGURATION (via Ansible) ha-prx01
+--------------------------------------------
+Configure web01.dmz.ws.kz and web02.dmz.ws.kz using Ansible from ha-prx01
+Requirements:
+- Web servers listen only on port 80 (HTTP)
+- Content directory: /opt/wwwroot/
+- /whoami returns hostname
+- Custom 404.html for not found pages
+-------------------------------------------------------------------------
+5.1 Prepare Ansible Environment on ha-prx01
+-------------------------------------------------------------------------
+# Install Ansible (using bridge interface if needed)
+sudo nano /etc/resolv.conf
+# insert
+nameserver 10.1.10.10
+nameserver 10.1.20.21
+search dmz.ws.kz int.ws.kz
+
+
+sudo chattr +i /etc/resolv.conf
+
+
+ip route | grep default
+default via 10.1.10.1 dev enp0s3 onlink
+default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+# Remove the default route via 10.1.10.1 (temporary)
+sudo ip route del default via 10.1.10.1 dev enp0s3
+
+sudo apt update
+sudo apt install -y ansible curl
+
+# Recovery the default route via 10.1.10.1
+sudo ip route add default via 10.1.10.1 dev enp0s3
+
+# Check version
+ansible --version
+
+# Create project directory structure
+sudo mkdir -p /opt/ansible/{files,templates,inventory}
+cd /opt/ansible
+-------------------------------------------------------------------------
+5.2 Configure SSH Key Authentication
+-------------------------------------------------------------------------
+
+# Generate SSH key (no passphrase)
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/ansible -N ""
+
+# Copy key to web01
+ssh-copy-id -i ~/.ssh/ansible.pub user@web01.dmz.ws.kz
+# If user@ format doesn't work, use IP:
+ssh-copy-id -i ~/.ssh/ansible.pub 10.1.20.31
+
+# Copy key to web02
+ssh-copy-id -i ~/.ssh/ansible.pub user@web02.dmz.ws.kz
+ssh-copy-id -i ~/.ssh/ansible.pub 10.1.20.32
+
+# Test SSH connections
+ssh -i ~/.ssh/ansible 10.1.20.31 "hostname"
+ssh -i ~/.ssh/ansible 10.1.20.32 "hostname"
+-------------------------------------------------------------------------
+5.3 Create Ansible Inventory
+-------------------------------------------------------------------------
+
+sudo nano /opt/ansible/inventory/hosts
+
+[webservers]
+web01 ansible_host=10.1.20.31 ansible_user=user ansible_ssh_private_key_file=/home/user/.ssh/ansible ansible_sudo_pass="1111"
+web02 ansible_host=10.1.20.32 ansible_user=user ansible_ssh_private_key_file=/home/user/.ssh/ansible ansible_sudo_pass="1111"
+
+[webservers:vars]
+ansible_become=yes
+ansible_become_method=sudo
+
+
+
+# Test inventory
+ansible-inventory -i /opt/ansible/inventory/hosts --list
+ansible webservers -i /opt/ansible/inventory/hosts -m ping
+-------------------------------------------------------------------------
+5.4 Create Web Content Files
+-------------------------------------------------------------------------
+
+# Create index.html template (will be customized per host)
+sudo nano /opt/ansible/files/index.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Web Server</title>
+</head>
+<body>
+    <h1>Web Server </h1>
+    <p><a href="/whoami">Who am I?</a></p>
+</body>
+</html>
+
+# Create 404.html
+sudo nano /opt/ansible/files/404.html
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>404 - Page Not Found</title>
+</head>
+<body>
+    <h1>404 - Page Not Found</h1>
+    <p><a href="/">Go to homepage</a></p>
+</body>
+</html>
+
+# Create whoami script
+sudo nano /opt/ansible/files/whoami.php
+
+<?php
+echo gethostname();
+?>
+-------------------------------------------------------------------------
+5.5 Create Ansible Playbook for Web Server Configuration
+-------------------------------------------------------------------------
+
+sudo nano /opt/ansible/configure-web.yml
+
+---
+- name: Configure Web Servers
+  hosts: webservers
+  become: yes
+  vars:
+    web_root: /opt/wwwroot
+    
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+
+    - name: Install PHP (for whoami script)
+      apt:
+        name: php
+        state: present
+
+    - name: Ensure Apache is started and enabled
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Create web root directory
+      file:
+        path: "{{ web_root }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: 0755
+
+    - name: Create whoami script directory
+      file:
+        path: "{{ web_root }}/whoami"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: 0755
+
+    - name: Copy index.html
+      copy:
+        src: files/index.html
+        dest: "{{ web_root }}/index.html"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Copy 404.html
+      copy:
+        src: files/404.html
+        dest: "{{ web_root }}/404.html"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Copy whoami script
+      copy:
+        src: files/whoami.php
+        dest: "{{ web_root }}/whoami/index.php"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Configure Apache virtual host
+      template:
+        src: templates/000-default.conf.j2
+        dest: /etc/apache2/sites-available/000-default.conf
+      notify: restart apache
+
+    - name: Enable Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+      notify: restart apache
+
+    - name: Create test file with hostname
+      copy:
+        content: "{{ ansible_hostname }}"
+        dest: "{{ web_root }}/hostname.txt"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+  handlers:
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+-------------------------------------------------------------------------
+5.6 Create Apache Virtual Host Template
+-------------------------------------------------------------------------
+sudo nano /opt/ansible/templates/000-default.conf.j2
+
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot {{ web_root }}
+    
+    # Custom 404 page
+    ErrorDocument 404 /404.html
+    
+    # Whoami handler - DirectoryIndex сам найдёт index.php
+    <Directory {{ web_root }}/whoami>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+        DirectoryIndex index.php
+    </Directory>
+    
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
+    
+    <Directory {{ web_root }}>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+-------------------------------------------------------------------------
+5.7 Create Specialized Playbook for web02 (for evaluation)
+-------------------------------------------------------------------------
+
+sudo nano /opt/ansible/configure-web02.yml
+
+---
+- name: Configure web02 only
+  hosts: web02
+  become: yes
+  vars:
+    web_root: /opt/wwwroot
+    
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+
+    - name: Install PHP
+      apt:
+        name: php
+        state: present
+
+    - name: Ensure Apache is started
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Create web root
+      file:
+        path: "{{ web_root }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: 0755
+
+    - name: Create whoami directory
+      file:
+        path: "{{ web_root }}/whoami"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: 0755
+
+    - name: Copy index.html
+      copy:
+        src: files/index.html
+        dest: "{{ web_root }}/index.html"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Copy 404.html
+      copy:
+        src: files/404.html
+        dest: "{{ web_root }}/404.html"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Copy whoami script
+      copy:
+        src: files/whoami.php
+        dest: "{{ web_root }}/whoami/index.php"
+        owner: www-data
+        group: www-data
+        mode: 0644
+
+    - name: Configure Apache
+      template:
+        src: templates/000-default.conf.j2
+        dest: /etc/apache2/sites-available/000-default.conf
+      notify: restart apache
+
+  handlers:
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
+		
+		
+-------------------------------------------------------------------------		
+keepalived 
+-------------------------------------------------------------------------
+# ha-prx01
+sudo nano /etc/keepalived/keepalived.conf
+
+vrrp_instance VI_1 {
+    state MASTER
+    interface enp0s3
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass Skill39!
+    }
+
+    virtual_ipaddress {
+        10.1.20.20/24
+        2001:db8:1001:20::20/64
+    }
+}
+
+
+# ha-prx02
+sudo nano /etc/keepalived/keepalived.conf
+
+vrrp_instance VI_1 {
+    state BACKUP
+    interface enp0s3
+    virtual_router_id 51
+    priority 90
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass Skill39!
+    }
+
+    virtual_ipaddress {
+        10.1.20.20/24
+        2001:db8:1001:20::20/64
+    }
+}
+		
+# ha-prx01 & ha-prx02:		
+sudo systemctl enable keepalived
+sudo systemctl restart keepalived
+
+# Verify that the virtual IP has appeared on ha-prx01:
+ip a show enp0s3 | grep "10.1.20.20"
+
+Check failover:
+# Stop keepalived on ha-prx01:
+sudo systemctl stop keepalived
+
+# Verify that the IP has moved to ha-prx02:
+# On ha-prx02:
+ip a show enp0s3 | grep "10.1.20.20"	
+
+
+-------------------------------------------------------------------------
+ngnix
+-------------------------------------------------------------------------
+# ha-prx01, ha-prx02:
+
+sudo mkdir -p /etc/nginx/ssl
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/nginx/ssl/www.key \
+    -out /etc/nginx/ssl/www.crt \
+    -subj "/CN=www.dmz.ws.kz"
+	
+	
+sudo nano /etc/nginx/sites-available/default
+
+# HTTP → HTTPS redirect
+
+upstream webservers {
+    server 10.1.20.31;
+    server 10.1.20.32;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name www.dmz.ws.kz;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS reverse proxy
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name www.dmz.ws.kz;
+
+    ssl_certificate /etc/nginx/ssl/www.crt;
+    ssl_certificate_key /etc/nginx/ssl/www.key;
+
+    # via-proxy header
+    add_header via-proxy $hostname;
+
+    location / {
+        proxy_pass http://webservers;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+
+
+
+
+sudo nginx -t
+sudo systemctl restart nginx
+
+Check:
+curl -k https://www.dmz.ws.kz
+curl -k https://10.1.20.20	
+-------------------------------------------------------------------------
+5.8 Run Ansible Playbooks
+-------------------------------------------------------------------------
+# web01, web02. Delete the default route via 10.1.10.1 (temporary)
+sudo ip route del default via 10.1.20.1 dev enp0s3
+
+# Run the actual configuration (ha-prx01)
+ansible-playbook -i /opt/ansible/inventory/hosts /opt/ansible/configure-web.yml
+
+# Verify web02 separately (as per evaluation requirement)
+ansible-playbook -i /opt/ansible/inventory/hosts /opt/ansible/configure-web02.yml
+-------------------------------------------------------------------------
+5.9 Verification from ha-prx01
+-------------------------------------------------------------------------
+# web01, web02. Recovery the default route via 10.1.10.1
+sudo ip route add default via 10.1.20.1 dev enp0s3
+
+
+# Test HTTP access
+curl -I http://web01.dmz.ws.kz
+curl -I http://web02.dmz.ws.kz
+
+# Get content
+curl http://web01.dmz.ws.kz
+curl http://web02.dmz.ws.kz
+
+# Test whoami
+curl http://web01.dmz.ws.kz/whoami
+curl http://web02.dmz.ws.kz/whoami
+# Should return: web01, web02
+
+# Test 404 page
+curl http://web01.dmz.ws.kz/nonexistent-page
+curl http://web02.dmz.ws.kz/nonexistent-page
+
+# Test via virtual IP (if haproxy configured)
+curl http://10.1.20.20
+curl http://prx-vrrp.dmz.ws.kz
+-------------------------------------------------------------------------
+5.10 Verification from other hosts
+-------------------------------------------------------------------------
+
+# From fw.ws.kz
+curl http://web01.dmz.ws.kz
+curl http://web02.dmz.ws.kz/whoami
+
+# From jamie-ws01 (after VPN/routing)
+curl http://web01.dmz.ws.kz
+curl http://www.dmz.ws.kz  # Should work via HA proxy later
+
+# firefox
+https://www.dmz.ws.kz
+https://www.dmz.ws.kz/blablabla
+-------------------------------------------------------------------------
+5.11 Manual Verification on web servers
+-------------------------------------------------------------------------
+
+# SSH to web01 and check
+ssh web01.dmz.ws.kz
+ls -la /opt/wwwroot/
+cat /opt/wwwroot/index.html
+cat /opt/wwwroot/whoami/index.php
+sudo systemctl status apache2
+exit
+
+# SSH to web02 and check
+ssh web02.dmz.ws.kz
+ls -la /opt/wwwroot/
+cat /opt/wwwroot/hostname.txt  # Should contain web02
+sudo systemctl status apache2
+exit
+
+-------------------------------------------------------------------------
+5.14 Troubleshooting
+-------------------------------------------------------------------------
+If Ansible fails:
+ansible webservers -i /opt/ansible/inventory/hosts -m ping
+ansible webservers -i /opt/ansible/inventory/hosts -m setup | grep ansible_os_family
+
+Check Apache logs on web servers:
+ssh web01.dmz.ws.kz "sudo tail -f /var/log/apache2/access.log"
+ssh web02.dmz.ws.kz "sudo tail -f /var/log/apache2/error.log"
+
+Test connectivity:
+ping -c 2 web01.dmz.ws.kz
+ping -c 2 web02.dmz.ws.kz

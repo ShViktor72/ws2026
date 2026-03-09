@@ -1,0 +1,173 @@
+--------------------------------------------
+2. ROUTING AND FIREWALL CONFIGURATION (fw.ws.kz)
+--------------------------------------------
+# Configure fw.ws.kz as router with nftables
+#  Initial policy: everything allowed (for testing)
+#Will be refined later according to competition requirements
+-------------------------------------------------------------------------
+2.1 Enable Packet Forwarding
+-------------------------------------------------------------------------
+# Edit sysctl.conf to enable IPv4 and IPv6 forwarding (permanent)
+sudo nano /etc/sysctl.conf
+
+# Add or uncomment these lines:
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+
+# Edit sysctl.d/99-forwarding.conf to enable IPv4 and IPv6 forwarding (permanent)
+sudo nano /etc/sysctl.d/99-forwarding.conf
+
+# insert:
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+
+# Save and exit (Ctrl+O, Ctrl+X in nano)
+# Apply immediately
+sudo sysctl -p
+
+# Verify
+sudo sysctl net.ipv4.ip_forward
+sudo sysctl net.ipv6.conf.all.forwarding
+
+-------------------------------------------------------------------------
+2.2 Install and Initialize nftables
+-------------------------------------------------------------------------
+# Enable and start nftables service
+sudo systemctl enable nftables
+sudo systemctl start nftables
+
+
+# Flush any existing rules
+sudo nft flush ruleset
+
+-------------------------------------------------------------------------
+2.3 Basic nftables Configuration (EVERYTHING ALLOWED)
+-------------------------------------------------------------------------
+# Open
+sudo nano /etc/nftables.conf
+
+# insert:
+
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy accept;
+    }
+    
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+    }
+    
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+
+
+# Load the configuration
+sudo nft -f /etc/nftables.conf
+
+-------------------------------------------------------------------------
+2.5 Save nftables Configuration and Enable at Boot
+-------------------------------------------------------------------------
+# Save current ruleset (if not already saved)
+sudo nft list ruleset | sudo tee /etc/nftables.conf
+
+# Ensure nftables loads rules at boot
+sudo systemctl enable nftables
+sudo systemctl start nftables
+sudo systemctl status nftables
+-------------------------------------------------------------------------
+2.6 Verification: Test Connectivity Between All Hosts
+-------------------------------------------------------------------------
+From int-srv01.int.ws.kz
+echo "=== Testing from int-srv01 ==="
+ping -c 2 10.1.10.1 # To fw (INT interface)
+ping -c 2 1.1.1.10 # To fw (WAN interface)
+ping -c 2 1.1.1.20 # To jamie-ws01
+ping -c 2 10.1.20.10 # To mail.dmz.ws.kz
+ping -c 2 10.1.20.21 # To ha-prx01
+ping -c 2 10.1.20.31 # To web01
+
+From mail.dmz.ws.kz
+echo "=== Testing from mail.dmz.ws.kz ==="
+ping -c 2 10.1.20.1 # To fw (DMZ interface)
+ping -c 2 10.1.10.10 # To int-srv01
+ping -c 2 1.1.1.20 # To jamie-ws01
+ping -c 2 10.1.20.21 # To ha-prx01
+ping -c 2 10.1.20.31 # To web01
+
+From ha-prx01.dmz.ws.kz
+echo "=== Testing from ha-prx01 ==="
+ping -c 2 10.1.20.1 # To fw
+ping -c 2 10.1.20.10 # To mail
+ping -c 2 10.1.20.22 # To ha-prx02 (same subnet)
+ping -c 2 10.1.20.31 # To web01
+ping -c 2 10.1.10.10 # To int-srv01 (cross-network)
+
+From web01.dmz.ws.kz
+echo "=== Testing from web01 ==="
+ping -c 2 10.1.20.1 # To fw
+ping -c 2 10.1.20.21 # To ha-prx01
+ping -c 2 10.1.20.32 # To web02
+ping -c 2 1.1.1.20 # To jamie-ws01
+
+From jamie-ws01.ext.ws.kz
+echo "=== Testing from jamie-ws01 ==="
+ping -c 2 1.1.1.10 # To fw (WAN)
+ping -c 2 10.1.10.10 # To int-srv01 (via fw)
+ping -c 2 10.1.20.10 # To mail (via fw)
+ping -c 2 10.1.20.21 # To ha-prx01
+ping -c 2 10.1.20.31 # To web01
+
+-------------------------------------------------------------------------
+2.8 IPv6 Connectivity Tests
+-------------------------------------------------------------------------
+Test IPv6 connectivity where configured
+From fw.ws.kz:
+ping6 -c 2 2001:db8:1111::20 # To jamie-ws01
+ping6 -c 2 2001:db8:1001:10::10 # To int-srv01
+ping6 -c 2 2001:db8:1001:20::10 # To mail.dmz.ws.kz
+
+From int-srv01:
+ping6 -c 2 2001:db8:1001:10::1 # To fw (INT)
+
+-------------------------------------------------------------------------
+2.9 Troubleshooting Common Issues
+-------------------------------------------------------------------------
+1. Check if forwarding is enabled
+cat /proc/sys/net/ipv4/ip_forward
+cat /proc/sys/net/ipv6/conf/all/forwarding
+
+2. Check nftables rules
+sudo nft list ruleset
+
+3. Check NAT rules specifically
+sudo nft list table ip nat
+
+4. Check interface status
+ip link show
+ip addr show
+
+5. Check routing tables
+ip route show
+ip -6 route show
+
+6. Check if packets are being forwarded (view counters)
+sudo nft list chain inet filter forward
+
+7. Temporarily disable firewall for testing
+sudo nft flush ruleset
+
+8. Enable packet forwarding temporarily (if not set in sysctl.conf)
+sudo sysctl -w net.ipv4.ip_forward=1
+
+9. Add logging for debugging
+sudo nft add rule inet filter forward log prefix "FW-FWD: " accept
+
+10. View logs
+sudo journalctl -kf | grep "FW-FWD"
+

@@ -1,0 +1,391 @@
+-------------------------------------------------------------------------
+3.7 DMZ DNS Servers (ha-prx01 and ha-prx02) - SIMPLIFIED
+-------------------------------------------------------------------------
+sudo nano /etc/hosts   
+
+127.0.0.1       localhost
+127.0.1.1       ha-prx01.dmz.ws.kz ha-prx01
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+
+--------------------------------------------
+TEMPORARY: Disable production default route for package installation
+--------------------------------------------
+ip route | grep default
+
+# example:
+- default via 10.1.20.1 dev enp0s3 onlink
+- default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+# Remove the default route via 10.1.20.1
+sudo ip route del default via 10.1.20.1 dev enp0s3
+
+
+# Check IPv6 routes
+ip -6 route show
+
+# there must be an address: 2001:db8:1001:20::21/64
+# and default route via fw: 2001:db8:1001:20::1
+# Add IPv6 default route (if not exist)
+sudo ip -6 route add default via 2001:db8:1001:20::1
+
+# Make It permanent
+sudo nano /etc/network/interfaces
+# Add to the INT section of the interface:
+
+iface enp0s3 inet6 static
+    address 2001:db8:1001:20::21/64
+    gateway 2001:db8:1001:20::1
+
+# dns-server 8.8.8.8 (temporary)
+sudo nano /etc/resolv.conf
+# insert:
+
+nameserver 8.8.8.8
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+nameserver 10.1.20.22           
+nameserver 2001:db8:1001:20::22
+nameserver 10.1.10.10           
+search dmz.ws.kz int.ws.kz
+
+
+# On ha-prx01.dmz.ws.kz:
+# Install BIND9
+sudo apt update
+sudo apt install -y bind9 bind9utils
+
+# delete dns-server 8.8.8.8 
+sudo nano /etc/resolv.conf
+
+# insert:
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+nameserver 10.1.20.22           
+nameserver 2001:db8:1001:20::22
+nameserver 10.1.10.10           
+search dmz.ws.kz int.ws.kz
+
+sudo ip route add default via 10.1.20.1 dev enp0s3
+
+
+-------------------------------------------------------------------------
+# Edit options
+-------------------------------------------------------------------------
+sudo nano /etc/bind/named.conf.options
+
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { any; };
+    allow-query { 10.1.20.0/24; 10.1.10.0/24; 127.0.0.0/8; 
+	::1/128; 2001:db8:1001:20::/64; 2001:db8:1001:10::/64; };
+    recursion no;  
+    dnssec-validation no;
+};
+
+-------------------------------------------------------------------------
+# Edit local configuration
+-------------------------------------------------------------------------
+sudo nano /etc/bind/named.conf.local
+
+// DMZ forward zone
+zone "dmz.ws.kz" {
+    type master;
+    file "/etc/bind/db.dmz.ws.kz";
+	allow-transfer { 10.1.10.10; 10.1.20.22; }; 
+};
+
+// Reverse zone for 10.1.20.0/24
+zone "20.1.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.10.1.20";
+	allow-transfer { 10.1.10.10; 10.1.20.22; };
+};
+
+// IPv6 reverse zone for 2001:db8:1001:20::/64
+zone "0.2.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
+    type master;
+    file "/etc/bind/db.2001.db8.1001.20";
+	allow-transfer { 10.1.10.10; 10.1.20.22; };
+};
+
+-------------------------------------------------------------------------
+# Create DMZ zone file
+sudo nano /etc/bind/db.dmz.ws.kz
+
+; BIND data file for dmz.ws.kz
+$TTL    604800
+@       IN      SOA     ha-prx01.dmz.ws.kz. admin.dmz.ws.kz. (
+                  2026030601      ; Serial
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      ha-prx01.dmz.ws.kz.
+
+; Host records (from Table 1)
+mail            IN      A       10.1.20.10
+mail            IN      AAAA    2001:db8:1001:20::10
+
+ha-prx01        IN      A       10.1.20.21
+ha-prx01        IN      AAAA    2001:db8:1001:20::21
+
+ha-prx02        IN      A       10.1.20.22
+ha-prx02        IN      AAAA    2001:db8:1001:20::22
+
+web01           IN      A       10.1.20.31
+web01           IN      AAAA    2001:db8:1001:20::31
+
+web02           IN      A       10.1.20.32
+web02           IN      AAAA    2001:db8:1001:20::32
+
+fw              IN      A       10.1.20.1
+fw              IN      AAAA    2001:db8:1001:20::1
+
+; Virtual IP (not a host, but we need DNS for it)
+prx-vrrp        IN      A       10.1.20.20
+prx-vrrp        IN      AAAA    2001:db8:1001:20::20
+
+; CNAME for www (MANDATORY: must be CNAME, not A record)
+www         IN  CNAME   prx-vrrp.dmz.ws.kz.
+
+
+-------------------------------------------------------------------------
+# Create reverse zone
+sudo nano /etc/bind/db.10.1.20
+
+; BIND reverse data file for 10.1.20.0/24
+$TTL    604800
+@       IN      SOA     ha-prx01.dmz.ws.kz. admin.dmz.ws.kz. (
+                  2026030601      ; Serial
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      ha-prx01.dmz.ws.kz.
+
+; PTR records
+10      IN      PTR     mail.dmz.ws.kz.
+21      IN      PTR     ha-prx01.dmz.ws.kz.
+22      IN      PTR     ha-prx02.dmz.ws.kz.
+31      IN      PTR     web01.dmz.ws.kz.
+32      IN      PTR     web02.dmz.ws.kz.
+1       IN      PTR     fw.dmz.ws.kz.
+20      IN      PTR     prx-vrrp.dmz.ws.kz.
+
+-------------------------------------------------------------------------
+sudo nano /etc/bind/db.2001.db8.1001.20
+
+; BIND reverse data file for 2001:db8:1001:20::/64
+$TTL    604800
+@       IN      SOA     ha-prx01.dmz.ws.kz. admin.dmz.ws.kz. (
+                  2026030701      ; Serial
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+; Name servers
+@       IN      NS      ha-prx01.dmz.ws.kz.
+; PTR records
+; 2001:db8:1001:20::10
+0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR mail.dmz.ws.kz.
+; 2001:db8:1001:20::21
+1.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR ha-prx01.dmz.ws.kz.
+; 2001:db8:1001:20::22
+2.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR ha-prx02.dmz.ws.kz.
+; 2001:db8:1001:20::1
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR fw.dmz.ws.kz.
+; 2001:db8:1001:20::20
+0.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR prx-vrrp.dmz.ws.kz.
+; 2001:db8:1001:20::31
+1.3.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR web01.dmz.ws.kz.
+; 2001:db8:1001:20::32
+2.3.0.0.0.0.0.0.0.0.0.0.0.0.0.0    IN PTR web02.dmz.ws.kz.
+
+
+-------------------------------------------------------------------------
+# Check and restart
+sudo named-checkconf
+sudo named-checkzone dmz.ws.kz /etc/bind/db.dmz.ws.kz
+sudo named-checkzone 20.1.10.in-addr.arpa /etc/bind/db.10.1.20
+sudo named-checkzone 0.2.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa /etc/bind/db.2001.db8.1001.20
+sudo systemctl restart named
+
+-------------------------------------------------------------------------
+3.8 Configure All Servers to Use DNS
+-------------------------------------------------------------------------
+# On every server (int-srv01, mail, ha-prx01, ha-prx02, web01, web02, fw, jamie-ws01)
+# Edit resolv.conf (temporary for testing)
+sudo nano /etc/resolv.conf
+
+
+# For INT network servers (int-srv01 already has its own)
+nameserver 10.1.10.10  
+search int.ws.kz dmz.ws.kz
+
+# For DMZ network servers (mail, ha-prx*, web*)
+nameserver 10.1.20.21  
+nameserver 10.1.20.22  
+search dmz.ws.kz int.ws.kz
+
+# For fw.ws.kz
+nameserver 10.1.10.10
+nameserver 10.1.20.21
+search ws.kz
+
+# For jamie-ws01.ext.ws.kz
+nameserver 10.1.10.10
+nameserver 10.1.20.21
+search ext.ws.kz ws.kz
+
+# Make resolv.conf permanent (disable NetworkManager/DHCP overwrites)
+sudo nano /etc/resolvconf/resolv.conf.d/head # if using resolvconf
+
+# Or for systemd-networkd:
+sudo nano /etc/systemd/resolved.conf
+
+# Simple approach: make resolv.conf immutable (temporary)
+sudo chattr +i /etc/resolv.conf
+
+-------------------------------------------------------------------------
+3.9 Final Verification (from any machine)
+-------------------------------------------------------------------------
+DNS CHECKLIST 
+1️⃣ ПРОВЕРКА НА int-srv01.int.ws.kz
+
+# Статус BIND
+sudo systemctl status named
+ss -tulpn | grep :53
+
+# Прямые записи
+dig @localhost int-srv01.int.ws.kz A +short
+dig @localhost int-srv01.int.ws.kz AAAA +short
+dig @localhost auth.int.ws.kz CNAME +short
+dig @localhost _ldap._tcp.auth.int.ws.kz SRV +short
+
+# Обратные записи
+dig @localhost -x 10.1.10.10 +short
+dig @localhost -x 2001:db8:1001:10::10 +short
+
+
+ПРОВЕРКА НА ha-prx01.dmz.ws.kz
+
+# Статус BIND
+sudo systemctl status named
+ss -tulpn | grep :53
+
+# Прямые записи
+dig @localhost ha-prx01.dmz.ws.kz A +short
+dig @localhost ha-prx01.dmz.ws.kz AAAA +short
+dig @localhost mail.dmz.ws.kz A +short
+dig @localhost web01.dmz.ws.kz A +short
+
+# Обратные записи
+dig @localhost -x 10.1.20.21 +short
+dig @localhost -x 2001:db8:1001:20::21 +short
+
+
+КРОСС-ПРОВЕРКА (с других хостов)
+
+# С fw.ws.kz
+nslookup int-srv01.int.ws.kz 10.1.10.10
+nslookup ha-prx01.dmz.ws.kz 10.1.20.21
+nslookup mail.dmz.ws.kz 10.1.20.21
+
+nslookup 10.1.10.10 10.1.10.10
+nslookup 10.1.20.21 10.1.20.21
+
+
+# С jamie-ws01.ext.ws.kz
+nslookup int-srv01.int.ws.kz 10.1.10.10
+nslookup ha-prx01.dmz.ws.kz 10.1.10.10
+nslookup mail.dmz.ws.kz 10.1.10.10
+
+nslookup 10.1.10.10 10.1.10.10
+nslookup 10.1.20.21 10.1.20.21
+
+️⃣ ЗОНАЛЬНЫЕ ПЕРЕДАЧИ (если настроены)
+
+# На int-srv01 (получить копию DMZ зоны)
+dig axfr dmz.ws.kz @10.1.20.21
+
+-------------------------------------------------------------------------
+3.10 Quick Troubleshooting
+-------------------------------------------------------------------------
+# If DNS not working:
+# 1. Check BIND is running
+sudo systemctl status named
+
+# 2. Check firewall (temporarily disable)
+sudo nft flush ruleset
+
+# 3. Check port 53 is listening
+sudo ss -tulpn | grep :53
+
+# 4. Test locally first
+dig @localhost int-srv01.int.ws.kz
+
+# 5. Check logs
+sudo journalctl -u named -f
+
+# 6. Verify zone transfers (if configured)
+sudo rndc status
+
+-------------------------------------------------------------------------
+ha-prx02
+-------------------------------------------------------------------------
+sudo nano /etc/bind/named.conf.options
+
+
+options {
+    directory "/var/cache/bind";
+    listen-on { any; };
+    listen-on-v6 { any; };
+    allow-query { 10.1.20.0/24; 10.1.10.0/24; 127.0.0.0/8; ::1/128; 2001:db8:1001:20::/64; 2001:db8:1001:10::/64; };
+    recursion no;
+    dnssec-validation no;
+};
+
+
+
+sudo nano /etc/bind/named.conf.local
+
+
+zone "dmz.ws.kz" {
+    type slave;
+    file "/var/cache/bind/db.dmz.ws.kz";
+    masters { 10.1.20.21; };
+};
+
+zone "20.1.10.in-addr.arpa" {
+    type slave;
+    file "/var/cache/bind/db.10.1.20";
+    masters { 10.1.20.21; };
+};
+
+zone "0.2.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
+    type slave;
+    file "/var/cache/bind/db.2001.db8.1001.20";
+    masters { 10.1.20.21; };
+};
+
+
+
+# Проверка и запуск
+sudo named-checkconf
+sudo systemctl restart named
+
+# Проверить что зоны получены с ha-prx01
+sudo journalctl -u named -n 20 --no-pager
+
+# Тест
+dig @localhost dmz.ws.kz SOA +short
+dig @localhost web01.dmz.ws.kz +short
+dig @localhost -x 10.1.20.21 +short
+dig @localhost -x 2001:db8:1001:20::21 +short

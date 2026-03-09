@@ -1,0 +1,232 @@
+# ============================================
+# LDAP SETUP int-srv01
+# ============================================
+
+# --------------------------------------------
+# 1. INSTALLATION
+# --------------------------------------------
+
+# Install server and utilities
+sudo apt update
+sudo apt install -y slapd ldap-utils
+
+# Check service status
+sudo systemctl status slapd
+
+# --------------------------------------------
+# 2. INITIAL CONFIGURATION (if needed)
+# --------------------------------------------
+
+# Reconfigure slapd (runs setup wizard)
+sudo dpkg-reconfigure slapd
+
+# ANSWERS FOR THE WIZARD:
+# ┌─────────────────────────────────────┐
+# │ Omit OpenLDAP server configuration? │ → No
+# │ DNS domain name?                    │ → int.ws.kz
+# │ Organization name?                   │ → WS
+# │ Administrator password?              │ → Skill39!
+# │ Confirm password?                    │ → Skill39!
+# │ Database backend?                    │ → MDB
+# │ Remove database when purge?          │ → No
+# │ Move old database?                   │ → Yes
+# │ Allow LDAPv2 protocol?                │ → No
+# └─────────────────────────────────────┘
+
+# --------------------------------------------
+# 3. CHECK CURRENT CONFIGURATION
+# --------------------------------------------
+
+# Show current domain
+sudo ldapsearch -x -LLL -b "" -s base namingContexts
+# Should show: dc=int,dc=ws,dc=kz
+
+# Show all database entries
+sudo slapcat
+
+# Show only structure (DNs)
+sudo slapcat | grep ^dn:
+
+# --------------------------------------------
+# 4. CREATE ORGANIZATIONAL UNITS (OU)
+# --------------------------------------------
+
+# Create LDIF file with structure
+cat > /tmp/base.ldif << 'EOF'
+# People - root folder for all users
+dn: ou=People,dc=int,dc=ws,dc=kz
+objectClass: organizationalUnit
+ou: People
+
+# Group - for groups (will be needed later)
+dn: ou=Group,dc=int,dc=ws,dc=kz
+objectClass: organizationalUnit
+ou: Group
+
+# Employees - inside People
+dn: ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+objectClass: organizationalUnit
+ou: Employees
+EOF
+
+# Add structure to LDAP
+ldapadd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -f /tmp/base.ldif
+# Password: Skill39!
+
+# Verify
+ldapsearch -x -b "dc=int,dc=ws,dc=kz" ou
+
+# --------------------------------------------
+# 5. ADD USERS (from Table 2)
+# --------------------------------------------
+
+# Create users file with nano
+nano /tmp/users.ldif
+
+# Copy this content into nano:
+
+# Jamie Oliver
+dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: jamie
+cn: Jamie Oliver
+sn: Oliver
+givenName: Jamie
+displayName: Jamie Oliver
+mail: jamie.oliver@dmz.ws.kz
+# userPassword: will be set separately
+uidNumber: 10001
+gidNumber: 5000
+homeDirectory: /home/jamie
+loginShell: /bin/bash
+
+# Peter Fox
+dn: uid=peter,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: peter
+cn: Peter Fox
+sn: Fox
+givenName: Peter
+displayName: Peter Fox
+mail: peter.fox@dmz.ws.kz
+# userPassword: will be set separately
+uidNumber: 10002
+gidNumber: 5000
+homeDirectory: /home/peter
+loginShell: /bin/bash
+
+# Administrator (root level, not in Employees)
+dn: uid=admin,dc=int,dc=ws,dc=kz
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: admin
+cn: Administrator
+sn: Administrator
+givenName: Admin
+displayName: Administrator
+# userPassword: will be set separately
+uidNumber: 10000
+gidNumber: 5000
+homeDirectory: /home/admin
+loginShell: /bin/bash
+
+# Add users (without passwords)
+ldapadd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -f /tmp/users.ldif
+
+# Set passwords for each user
+echo "Setting password for jamie..."
+ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+# Enter: Skill39! (twice)
+
+echo "Setting password for peter..."
+ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=peter,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+# Enter: Skill39! (twice)
+
+echo "Setting password for admin..."
+ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=admin,dc=int,dc=ws,dc=kz
+# Enter: Skill39! (twice)
+
+# --------------------------------------------
+# 6. VERIFY USERS
+# --------------------------------------------
+
+# Find specific user
+ldapsearch -x -b "dc=int,dc=ws,dc=kz" uid=jamie
+
+# Find all users
+ldapsearch -x -b "dc=int,dc=ws,dc=kz" "(objectClass=inetOrgPerson)"
+
+# Test authentication
+ldapwhoami -x -H ldap://localhost -D uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz -W
+# Enter password: Skill39!
+
+# --------------------------------------------
+# 7. DELETE / MODIFY (if something wrong)
+# --------------------------------------------
+
+# Delete user
+# ldapdelete -x -D cn=admin,dc=int,dc=ws,dc=kz -W "uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz"
+
+# Delete whole structure (careful!)
+# ldapdelete -x -D cn=admin,dc=int,dc=ws,dc=kz -W -r "dc=int,dc=ws,dc=kz"
+
+# Change user password
+# ldappasswd -x -D cn=admin,dc=int,dc=ws,dc=kz -W -S uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+
+# --------------------------------------------
+# 8. DEBUGGING COMMANDS
+# --------------------------------------------
+
+# Check LDAP logs
+sudo tail -f /var/log/syslog | grep slapd
+
+# Check listening ports (389 = LDAP, 636 = LDAPS)
+sudo netstat -tulpn | grep slapd
+
+# Restart server
+sudo systemctl restart slapd
+
+# Stop/start
+sudo systemctl stop slapd
+sudo systemctl start slapd
+
+# --------------------------------------------
+# 9. COMMON ERRORS & SOLUTIONS
+# --------------------------------------------
+
+# ERROR: ldap_bind: Invalid credentials (49)
+# FIX: wrong admin password
+
+# ERROR: ldap_add: No such object (32)
+# FIX: parent OU doesn't exist, create structure first
+
+# ERROR: ldap_add: Already exists (68)
+# FIX: entry already exists, use modify instead of add
+
+# --------------------------------------------
+# 10. LDIF QUICK REFERENCE
+# --------------------------------------------
+# DN - Distinguished Name (unique path)
+dn: uid=jamie,ou=Employees,ou=People,dc=int,dc=ws,dc=kz
+
+# objectClass - defines allowed attributes
+objectClass: inetOrgPerson    # for people (name, surname, email)
+objectClass: posixAccount     # for Linux users (uid, gid, home)
+
+# Attributes:
+uid: jamie                    # login name
+cn: Jamie Oliver              # common name (full name)
+sn: Oliver                    # surname
+givenName: Jamie              # first name
+mail: jamie.oliver@dmz.ws.kz  # email
+userPassword: {CRYPT}Skill39! # password (use slappasswd for real hash)
+uidNumber: 10001              # UNIX uid
+gidNumber: 5000               # UNIX gid
+homeDirectory: /home/jamie    # home folder
+loginShell: /bin/bash         # shell
+'

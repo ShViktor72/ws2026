@@ -1,0 +1,311 @@
+--------------------------------------------
+3. DNS SERVER CONFIGURATION (BIND9)
+--------------------------------------------
+Configure DNS servers according to Table 1:
+- int-srv01.int.ws.kz: Internal DNS server (master for int.ws.kz)
+- ha-prx01.dmz.ws.kz: Primary DNS for DMZ
+- ha-prx02.dmz.ws.kz: Secondary DNS for DMZ
+- prx-vrrp.dmz.ws.kz: Virtual IP for HA DNS (configured later)
+-------------------------------------------------------------------------
+3.1 Internal DNS Server (int-srv01.int.ws.kz)
+-------------------------------------------------------------------------
+--------------------------------------------
+TEMPORARY: Disable production default route for package installation
+--------------------------------------------
+ip route | grep default
+
+# example:
+- default via 10.1.10.1 dev enp0s3 onlink
+- default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+# Remove the default route via 10.1.10.1
+sudo ip route del default via 10.1.10.1 dev enp0s3
+
+# Check IPv6 on int-srv01
+# Check IPv6 addresses
+ip -6 addr show
+
+# Check IPv6 routes
+ip -6 route show
+
+# there must be an address: 2001:db8:1001:10::10/64
+# and default route via fw: 2001:db8:1001:10::1
+Шаг 2: Add IPv6 default route (if not exist)
+sudo ip -6 route add default via 2001:db8:1001:10::1
+
+# Make it permanent
+sudo nano /etc/network/interfaces
+Add to the INT section of the interface:
+
+iface enp0s3 inet6 static
+    address 2001:db8:1001:10::10/64
+    gateway 2001:db8:1001:10::1
+
+
+
+# Install BIND9
+sudo apt update
+sudo apt install -y bind9 bind9utils bind9-doc
+
+# Check status
+sudo systemctl status named
+
+# After installation, restore production route if needed for testing
+sudo ip route add default via 10.1.10.1 dev enp0s3
+
+-------------------------------------------------------------------------
+3.2 Basic BIND9 Configuration (int-srv01)
+-------------------------------------------------------------------------
+# Edit main configuration file
+sudo nano /etc/bind/named.conf.options
+# insert:
+
+options {
+    directory "/var/cache/bind";
+    
+    // Listen on all interfaces
+    listen-on { any; };
+    listen-on-v6 { any; };
+    
+    // Allow queries from all networks
+    allow-query { any; };
+    
+    // Enable recursion for internal networks
+    recursion yes;
+    allow-recursion { 127.0.0.0/8; 10.1.10.0/24; 10.1.20.0/24; 1.1.1.0/24;
+                  ::1/128; 2001:db8:1001:10::/64; 2001:db8:1001:20::/64; 
+                  2001:db8:1111::/64; };  
+
+    // Security
+    version "not available";
+    
+    // Disable DNSSEC for simplicity in lab
+    dnssec-validation no;
+};
+-------------------------------------------------------------------------
+3.3 Create Internal Zone (int.ws.kz)
+-------------------------------------------------------------------------
+#  Edit zone configuration
+sudo nano /etc/bind/named.conf.local
+
+# Add zones:
+
+// Forward zone for int.ws.kz
+zone "int.ws.kz" {
+    type master;
+    file "/etc/bind/db.int.ws.kz";
+    allow-transfer { none; };  // Will update later for DMZ sync
+};
+
+// Reverse zone for 10.1.10.0/24
+zone "10.1.10.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.10.1.10";
+};
+
+zone "dmz.ws.kz" {
+    type slave;
+    file "/var/cache/bind/db.dmz.ws.kz";
+    masters { 10.1.20.21; };
+};
+
+zone "20.1.10.in-addr.arpa" {
+    type slave;
+    file "/var/cache/bind/db.10.1.20";
+    masters { 10.1.20.21; };
+};
+
+// IPv6 reverse zone for 2001:db8:1001:10::/64
+zone "0.1.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
+    type master;
+    file "/etc/bind/db.2001.db8.1001.10";
+};
+-------------------------------------------------------------------------
+3.4 Create Zone Files (int.ws.kz)
+-------------------------------------------------------------------------
+# Forward zone file
+sudo nano /etc/bind/db.int.ws.kz
+
+# insert:
+
+; BIND data file for int.ws.kz
+$TTL    604800
+@       IN      SOA     int-srv01.int.ws.kz. admin.int.ws.kz. (
+                  2026030601      ; Serial (YYYYMMDDNN)
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      int-srv01.int.ws.kz.
+
+; Host records (from Table 1)
+int-srv01       IN      A       10.1.10.10
+int-srv01       IN      AAAA    2001:db8:1001:10::10
+
+fw              IN      A       10.1.10.1
+fw              IN      AAAA    2001:db8:1001:10::1
+
+; Aliases
+auth            IN      CNAME   int-srv01
+ldap            IN      CNAME   int-srv01
+
+; Service records (LDAP SRV record)
+_ldap._tcp.auth.int.ws.kz. IN SRV 10 50 389 int-srv01.int.ws.kz.
+
+; AAAA records (IPv6)
+int-srv01       IN      AAAA    2001:db8:1001:10::10
+fw              IN      AAAA    2001:db8:1001:10::1
+
+-------------------------------------------------------------------------
+# Reverse zone for 10.1.10.0/24
+-------------------------------------------------------------------------
+sudo nano /etc/bind/db.10.1.10
+
+# insert:
+
+
+$TTL    604800
+@       IN      SOA     int-srv01.int.ws.kz. admin.int.ws.kz. (
+                  2026030601      ; Serial
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      int-srv01.int.ws.kz.
+
+; PTR records
+10      IN      PTR     int-srv01.int.ws.kz.
+1       IN      PTR     fw.int.ws.kz.
+
+
+-------------------------------------------------------------------------
+# IPv6 reverse zone
+-------------------------------------------------------------------------
+sudo nano /etc/bind/db.2001.db8.1001.10
+
+# insert:
+
+; BIND reverse data file for 2001:db8:1001:10::/64
+$TTL    604800
+@       IN      SOA     int-srv01.int.ws.kz. admin.int.ws.kz. (
+                  2026030601      ; Serial
+                  604800          ; Refresh
+                  86400           ; Retry
+                  2419200         ; Expire
+                  604800 )        ; Negative Cache TTL
+
+; Name servers
+@       IN      NS      int-srv01.int.ws.kz.
+
+; PTR records
+; Reverse of 2001:db8:1001:10::10
+0.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0 IN PTR int-srv01.int.ws.kz.
+; Reverse of 2001:db8:1001:10::1
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 IN PTR fw.int.ws.kz.
+
+-------------------------------------------------------------------------
+3.5 Check Configuration and Restart BIND9
+-------------------------------------------------------------------------
+# Check configuration syntax
+sudo named-checkconf
+
+# Check zone files
+sudo named-checkzone int.ws.kz /etc/bind/db.int.ws.kz
+sudo named-checkzone 10.10.in-addr.arpa /etc/bind/db.10.1.10
+
+# Restart BIND9
+sudo systemctl restart named
+sudo systemctl status named
+
+--------------------------------------------
+FIX: Configure DNS on ALL machines
+--------------------------------------------
+# int-srv01.int.ws.kz
+
+sudo chattr -i /etc/resolv.conf
+sudo nano /etc/resolv.conf
+# insert:
+
+nameserver 10.1.10.10           
+nameserver 2001:db8:1001:10::10
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+search int.ws.kz dmz.ws.kz
+
+# protect
+sudo chattr +i /etc/resolv.conf
+
+# restart BIND
+sudo systemctl restart named
+# check 
+dig @localhost int-srv01.int.ws.kz
+
+--------------------------------------------
+# fw.ws.kz:
+--------------------------------------------
+sudo nano /etc/resolv.conf
+
+# insert:
+
+nameserver 10.1.10.10           
+nameserver 2001:db8:1001:10::10
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+search ws.kz int.ws.kz dmz.ws.kz ext.ws.kz
+
+# protect
+sudo chattr +i /etc/resolv.conf
+
+# check:
+nslookup int-srv01.int.ws.kz
+
+--------------------------------------------
+# DMZ (mail, web01, web02, ha-prx01, ha-prx02):
+--------------------------------------------
+sudo nano /etc/resolv.conf
+
+# insert:
+
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+nameserver 10.1.20.22           
+nameserver 2001:db8:1001:20::22
+nameserver 10.1.10.10           
+search dmz.ws.kz int.ws.kz
+
+# protect
+sudo chattr +i /etc/resolv.conf
+
+--------------------------------------------
+# jamie-ws01.ext.ws.kz:
+--------------------------------------------
+sudo nano /etc/resolv.conf
+
+nameserver 10.1.10.10           
+nameserver 2001:db8:1001:10::10
+nameserver 10.1.20.21           
+nameserver 2001:db8:1001:20::21
+nameserver 10.1.20.22           
+nameserver 2001:db8:1001:20::22
+search ext.ws.kz ws.kz int.ws.kz dmz.ws.kz
+
+sudo chattr +i /etc/resolv.conf
+
+# check:
+nslookup int-srv01.int.ws.kz
+
+-------------------------------------------------------------------------
+3.6 Test Internal DNS
+-------------------------------------------------------------------------
+# Test from int-srv01 itself
+dig int-srv01.int.ws.kz
+dig -x 10.1.10.10
+dig auth.int.ws.kz
+dig _ldap._tcp.auth.int.ws.kz SRV
+
+
+

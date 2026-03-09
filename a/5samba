@@ -1,0 +1,246 @@
+--------------------------------------------
+4. SAMBA FILE SERVER CONFIGURATION (int-srv01.int.ws.kz)
+--------------------------------------------
+Configure Samba according to Table 3 and share requirements
+Users: jamie (Skill39!)
+Shares: /public (guest read, authenticated write)
+/internal (authenticated read/write)
+-------------------------------------------------------------------------
+4.1 Install Samba
+-------------------------------------------------------------------------
+ip route | grep default
+default via 10.1.10.1 dev enp0s3 onlink
+default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+# Remove the default route via 10.1.10.1 (temporary)
+sudo ip route del default via 10.1.10.1 dev enp0s3
+
+
+# Update package list (using bridge interface if needed)
+sudo apt update
+
+# Install Samba
+sudo apt install -y samba samba-common-bin
+
+# Install smbclient for testing
+sudo apt install -y smbclient
+
+# Recovery the default route via 10.1.10.1
+sudo ip route add default via 10.1.10.1 dev enp0s3
+
+# Check version and status
+sudo systemctl status smbd
+-------------------------------------------------------------------------
+4.2 Create Local Users (from Table 3)
+-------------------------------------------------------------------------
+
+# Table 3: Samba users
+# USERNAME: jamie
+# PASSWORD: Skill39!
+
+# Create system user (no login shell)
+sudo useradd -M -s /usr/sbin/nologin jamie
+
+# Set password for system user
+sudo passwd jamie
+
+# Add user to Samba password database
+echo -e 'Skill39!\nSkill39!' | sudo smbpasswd -a jamie
+
+# Enable Samba user
+sudo smbpasswd -e jamie
+
+# Verify Samba users
+sudo pdbedit -L
+-------------------------------------------------------------------------
+4.3 Create Shared Directories
+-------------------------------------------------------------------------
+
+# Create directories
+sudo mkdir -p /srv/samba/public
+sudo mkdir -p /srv/samba/internal
+
+# Set permissions for public (everyone can read, authenticated write)
+sudo chmod 1777 /srv/samba/public  
+
+# Set permissions for internal (only jamie)
+sudo chown jamie:jamie /srv/samba/internal
+sudo chmod 770 /srv/samba/internal
+
+# Create test files
+sudo nano /srv/samba/public/readme.txt
+# insert 
+hello
+
+sudo nano /srv/samba/internal/README.txt
+# insert 
+hello
+-------------------------------------------------------------------------
+4.4 Configure Samba (/etc/samba/smb.conf)
+-------------------------------------------------------------------------
+
+# Backup original config
+sudo cp /etc/samba/smb.conf /etc/samba/smb.conf.backup
+
+# Edit Samba configuration
+sudo cp /dev/null /etc/samba/smb.conf
+
+sudo nano /etc/samba/smb.conf
+# Replace with this minimal configuration:
+
+[global]
+   workgroup = WORKGROUP
+   server string = %h server (Samba)
+   map to guest = Bad User
+   guest account = nobody
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   logging = file
+   panic action = /usr/share/samba/panic-action %d
+   server role = standalone server
+   passdb backend = tdbsam
+   obey pam restrictions = yes
+   unix password sync = yes
+   passwd program = /usr/bin/passwd %u
+   passwd chat = *Enter\snew\s*\spassword:* %n\n *Retype\snew\s*\spassword:* %n\n *password\supdated\ssuccessfully*
+   pam password change = yes
+
+[public]
+   comment = Public Files (read-only for guests, write for authenticated)
+   path = /srv/samba/public
+   browseable = yes
+   read only = no
+   guest ok = yes
+   create mask = 0666
+   directory mask = 0777
+   force create mode = 0666
+   force directory mode = 0777
+
+[internal]
+   comment = Internal Files (only authenticated users)
+   path = /srv/samba/internal
+   browseable = yes
+   read only = no
+   guest ok = no
+   valid users = jamie
+   create mask = 0660
+   directory mask = 0770
+-------------------------------------------------------------------------
+4.5 Test Samba Configuration
+-------------------------------------------------------------------------
+
+# Test configuration syntax
+testparm
+
+# Restart Samba services
+sudo systemctl restart smbd
+sudo systemctl restart nmbd
+
+# Check status
+sudo systemctl status smbd
+sudo systemctl status nmbd 
+
+-------------------------------------------------------------------------
+4.6 Test Locally on int-srv01
+-------------------------------------------------------------------------
+# List shares anonymously
+smbclient -L //localhost -N
+
+# List shares as jamie
+smbclient -L //localhost -U jamie
+
+# Test public share (anonymous)
+smbclient //localhost/public -N -c "ls"
+
+# Test internal share (as jamie)
+smbclient //localhost/internal -U jamie%Skill39! -c "ls"
+
+# Test write to public (as jamie)
+echo "test file" > /tmp/test.txt
+smbclient //localhost/public -U jamie%Skill39! -c "put /tmp/test.txt test.txt; ls"
+-------------------------------------------------------------------------
+4.8 Test from jamie-ws01 (after client is ready)
+-------------------------------------------------------------------------
+# From jamie-ws01.ext.ws.kz (after GNOME installed)
+sudo chattr -i /etc/resolv.conf
+sudo nano /etc/resolv.conf
+# add nameserver 8.8.8.8
+
+ip route | grep default
+
+# example:
+- default via 10.1.10.1 dev enp0s3 onlink
+- default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+# Remove the default route via 10.1.10.1
+sudo ip route del default via 10.1.10.1 dev enp0s3
+
+# Install smbclient
+sudo apt install -y smbclient
+
+
+sudo nano /etc/resolv.conf
+# remove nameserver 8.8.8.8
+
+# Recovery the default route via 10.1.10.1
+sudo ip route add default via 10.1.10.1 dev enp0s3
+sudo chattr +i /etc/resolv.conf
+
+ip route | grep default
+# example:
+- default via 10.1.10.1 dev enp0s3 onlink
+- default via 192.168.0.1 dev enp0s10 proto dhcp src 192.168.0.211 metric 1003
+
+
+
+
+# Test anonymous access to public
+smbclient //int-srv01.int.ws.kz/public -N
+
+# ls                    
+# exit                  
+
+# Test authenticated access
+smbclient //int-srv01.int.ws.kz/internal -U jamie%Skill39! -c "ls"
+smbclient //int-srv01.int.ws.kz/public -U jamie%Skill39! -c "ls"
+
+-------------------------------------------------------------------------
+4.9 Access from GNOME (jamie-ws01)
+-------------------------------------------------------------------------
+
+# After GNOME is installed, use Files 
+# smb://int-srv01.int.ws.kz/public
+# smb://int-srv01.int.ws.kz/internal
+-------------------------------------------------------------------------
+
+-------------------------------------------------------------------------
+4.11 Quick Troubleshooting
+-------------------------------------------------------------------------
+# Check logs
+sudo journalctl -u smbd -n 20 --no-pager
+
+# Check if ports are listening
+sudo ss -tulpn | grep -E '139|445'
+
+# Test from remote (from jamie-ws01)
+nmblookup -S int-srv01
+
+# Reset Samba password if needed
+sudo smbpasswd jamie
+# Enter: Skill39!
+
+# Restart services
+sudo systemctl restart smbd nmbd
+-------------------------------------------------------------------------
+4.12 Important Notes
+-------------------------------------------------------------------------
+1. Users are LOCAL (not LDAP) - Table 3 specifies local users
+2. /public: guests can read (guest ok = yes), authenticated can write
+3. /internal: only jamie (valid users = jamie)
+4. Permissions:
+- public: 1777 (sticky bit prevents deletion by others)
+- internal: 770 (only jamie and group)
+5. Samba passwords stored in tdbsam (not system passwords)
+6. For testing from jamie-ws01, routing must work (check Step 2)
+7. DNS must resolve int-srv01.int.ws.kz (check Step 3)
+After verification, proceed to next step: Web Servers configuration

@@ -1,0 +1,48 @@
+# On int-srv01 (log collection server):
+
+sudo apt install -y rsyslog
+
+# Configure rsyslog to receive logs
+sudo nano /etc/rsyslog.conf
+
+# Receive logs via UDP and TCP
+module(load="imudp")
+input(type="imudp" port="514")
+
+module(load="imtcp")
+input(type="imtcp" port="514")
+
+# Save logs for each host to a separate file
+$template RemoteLogs,"/opt/logs/%HOSTNAME%.log"
+*.* ?RemoteLogs
+
+
+# Create a directory for logs
+sudo mkdir -p /opt/logs
+
+# Restart
+sudo systemctl restart rsyslog
+
+# Check that it is listening on port 514
+sudo ss -tlnup | grep 514
+
+-------------------------------------------------------------------------
+# On each client (mail, ha-prx01, ha-prx02, web01, web02, fw):
+-------------------------------------------------------------------------
+sudo nano /etc/rsyslog.conf
+
+# Append to end:
+# Send logs to int-srv01
+*.* @10.1.10.10:514    # UDP
+*.* @@10.1.10.10:514   # TCP
+ 
+sudo systemctl restart rsyslog
+
+
+Checking on int-srv01:
+# Force a test log from the client
+logger -t test "Hello from $(hostname)"
+
+# Check on int-srv01
+ls /opt/logs/
+cat /opt/logs/ha-prx01.dmz.ws.kz.log
