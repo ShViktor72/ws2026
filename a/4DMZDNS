@@ -22,32 +22,14 @@ ip route | grep default
 sudo ip route del default via 10.1.20.1 dev enp0s3
 
 
-# Check IPv6 routes
-ip -6 route show
-
-# there must be an address: 2001:db8:1001:20::21/64
-# and default route via fw: 2001:db8:1001:20::1
-# Add IPv6 default route (if not exist)
-sudo ip -6 route add default via 2001:db8:1001:20::1
-
-# Make It permanent
-sudo nano /etc/network/interfaces
-# Add to the INT section of the interface:
-
-iface enp0s3 inet6 static
-    address 2001:db8:1001:20::21/64
-    gateway 2001:db8:1001:20::1
-
 # dns-server 8.8.8.8 (temporary)
 sudo nano /etc/resolv.conf
 # insert:
 
 nameserver 8.8.8.8
-nameserver 10.1.20.21           
+nameserver 10.1.20.21
+nameserver 10.1.20.22
 nameserver 2001:db8:1001:20::21
-nameserver 10.1.20.22           
-nameserver 2001:db8:1001:20::22
-nameserver 10.1.10.10           
 search dmz.ws.kz int.ws.kz
 
 
@@ -60,11 +42,9 @@ sudo apt install -y bind9 bind9utils
 sudo nano /etc/resolv.conf
 
 # insert:
-nameserver 10.1.20.21           
+nameserver 10.1.20.21
+nameserver 10.1.20.22
 nameserver 2001:db8:1001:20::21
-nameserver 10.1.20.22           
-nameserver 2001:db8:1001:20::22
-nameserver 10.1.10.10           
 search dmz.ws.kz int.ws.kz
 
 sudo ip route add default via 10.1.20.1 dev enp0s3
@@ -244,12 +224,6 @@ nameserver 10.1.10.10
 nameserver 10.1.20.21
 search ext.ws.kz ws.kz
 
-# Make resolv.conf permanent (disable NetworkManager/DHCP overwrites)
-sudo nano /etc/resolvconf/resolv.conf.d/head # if using resolvconf
-
-# Or for systemd-networkd:
-sudo nano /etc/systemd/resolved.conf
-
 # Simple approach: make resolv.conf immutable (temporary)
 sudo chattr +i /etc/resolv.conf
 
@@ -257,63 +231,39 @@ sudo chattr +i /etc/resolv.conf
 3.9 Final Verification (from any machine)
 -------------------------------------------------------------------------
 DNS CHECKLIST 
-1️⃣ ПРОВЕРКА НА int-srv01.int.ws.kz
+# check from int-srv01.int.ws.kz
 
-# Статус BIND
-sudo systemctl status named
-ss -tulpn | grep :53
-
-# Прямые записи
 dig @localhost int-srv01.int.ws.kz A +short
 dig @localhost int-srv01.int.ws.kz AAAA +short
 dig @localhost auth.int.ws.kz CNAME +short
 dig @localhost _ldap._tcp.auth.int.ws.kz SRV +short
-
-# Обратные записи
 dig @localhost -x 10.1.10.10 +short
 dig @localhost -x 2001:db8:1001:10::10 +short
 
 
-ПРОВЕРКА НА ha-prx01.dmz.ws.kz
-
-# Статус BIND
-sudo systemctl status named
-ss -tulpn | grep :53
-
-# Прямые записи
+# check from ha-prx01.dmz.ws.kz
 dig @localhost ha-prx01.dmz.ws.kz A +short
 dig @localhost ha-prx01.dmz.ws.kz AAAA +short
 dig @localhost mail.dmz.ws.kz A +short
 dig @localhost web01.dmz.ws.kz A +short
-
-# Обратные записи
 dig @localhost -x 10.1.20.21 +short
 dig @localhost -x 2001:db8:1001:20::21 +short
 
 
-КРОСС-ПРОВЕРКА (с других хостов)
-
-# С fw.ws.kz
+# from fw.ws.kz
 nslookup int-srv01.int.ws.kz 10.1.10.10
 nslookup ha-prx01.dmz.ws.kz 10.1.20.21
 nslookup mail.dmz.ws.kz 10.1.20.21
-
 nslookup 10.1.10.10 10.1.10.10
 nslookup 10.1.20.21 10.1.20.21
 
 
-# С jamie-ws01.ext.ws.kz
+# from jamie-ws01.ext.ws.kz
 nslookup int-srv01.int.ws.kz 10.1.10.10
 nslookup ha-prx01.dmz.ws.kz 10.1.10.10
 nslookup mail.dmz.ws.kz 10.1.10.10
-
 nslookup 10.1.10.10 10.1.10.10
 nslookup 10.1.20.21 10.1.20.21
-
-️⃣ ЗОНАЛЬНЫЕ ПЕРЕДАЧИ (если настроены)
-
-# На int-srv01 (получить копию DMZ зоны)
-dig axfr dmz.ws.kz @10.1.20.21
 
 -------------------------------------------------------------------------
 3.10 Quick Troubleshooting
@@ -342,7 +292,6 @@ ha-prx02
 -------------------------------------------------------------------------
 sudo nano /etc/bind/named.conf.options
 
-
 options {
     directory "/var/cache/bind";
     listen-on { any; };
@@ -353,9 +302,7 @@ options {
 };
 
 
-
 sudo nano /etc/bind/named.conf.local
-
 
 zone "dmz.ws.kz" {
     type slave;
@@ -377,14 +324,14 @@ zone "0.2.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
 
 
 
-# Проверка и запуск
+# check and run
 sudo named-checkconf
 sudo systemctl restart named
 
-# Проверить что зоны получены с ha-prx01
+# Check that the zones are received from ha-prx01
 sudo journalctl -u named -n 20 --no-pager
 
-# Тест
+# test
 dig @localhost dmz.ws.kz SOA +short
 dig @localhost web01.dmz.ws.kz +short
 dig @localhost -x 10.1.20.21 +short

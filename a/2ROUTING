@@ -1,21 +1,14 @@
 --------------------------------------------
-2. ROUTING AND FIREWALL CONFIGURATION (fw.ws.kz)
+ROUTING AND FIREWALL CONFIGURATION (fw.ws.kz)
 --------------------------------------------
 # Configure fw.ws.kz as router with nftables
 #  Initial policy: everything allowed (for testing)
 #Will be refined later according to competition requirements
 -------------------------------------------------------------------------
-2.1 Enable Packet Forwarding
+Enable Packet Forwarding
 -------------------------------------------------------------------------
-# Edit sysctl.conf to enable IPv4 and IPv6 forwarding (permanent)
-sudo nano /etc/sysctl.conf
-
-# Add or uncomment these lines:
-net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
-
 # Edit sysctl.d/99-forwarding.conf to enable IPv4 and IPv6 forwarding (permanent)
-sudo nano /etc/sysctl.d/99-forwarding.conf
+sudo nano /etc/sysctl.d/99-router.conf
 
 # insert:
 net.ipv4.ip_forward = 1
@@ -23,25 +16,15 @@ net.ipv6.conf.all.forwarding = 1
 
 # Save and exit (Ctrl+O, Ctrl+X in nano)
 # Apply immediately
-sudo sysctl -p
+sudo sysctl --system
 
 # Verify
 sudo sysctl net.ipv4.ip_forward
 sudo sysctl net.ipv6.conf.all.forwarding
 
--------------------------------------------------------------------------
-2.2 Install and Initialize nftables
--------------------------------------------------------------------------
-# Enable and start nftables service
-sudo systemctl enable nftables
-sudo systemctl start nftables
-
-
-# Flush any existing rules
-sudo nft flush ruleset
 
 -------------------------------------------------------------------------
-2.3 Basic nftables Configuration (EVERYTHING ALLOWED)
+Basic nftables Configuration (EVERYTHING ALLOWED)
 -------------------------------------------------------------------------
 # Open
 sudo nano /etc/nftables.conf
@@ -67,18 +50,9 @@ table inet filter {
 }
 
 
-# Load the configuration
-sudo nft -f /etc/nftables.conf
-
--------------------------------------------------------------------------
-2.5 Save nftables Configuration and Enable at Boot
--------------------------------------------------------------------------
-# Save current ruleset (if not already saved)
-sudo nft list ruleset | sudo tee /etc/nftables.conf
-
 # Ensure nftables loads rules at boot
 sudo systemctl enable nftables
-sudo systemctl start nftables
+sudo systemctl restart nftables
 sudo systemctl status nftables
 -------------------------------------------------------------------------
 2.6 Verification: Test Connectivity Between All Hosts
@@ -128,12 +102,12 @@ ping -c 2 10.1.20.31 # To web01
 -------------------------------------------------------------------------
 Test IPv6 connectivity where configured
 From fw.ws.kz:
-ping6 -c 2 2001:db8:1111::20 # To jamie-ws01
-ping6 -c 2 2001:db8:1001:10::10 # To int-srv01
-ping6 -c 2 2001:db8:1001:20::10 # To mail.dmz.ws.kz
+ping6 -c 2 2001:db8:1111::20 
+ping6 -c 2 2001:db8:1001:10::10 
+ping6 -c 2 2001:db8:1001:20::10 
 
 From int-srv01:
-ping6 -c 2 2001:db8:1001:10::1 # To fw (INT)
+ping6 -c 2 2001:db8:1001:10::1 
 
 -------------------------------------------------------------------------
 2.9 Troubleshooting Common Issues
@@ -145,29 +119,9 @@ cat /proc/sys/net/ipv6/conf/all/forwarding
 2. Check nftables rules
 sudo nft list ruleset
 
-3. Check NAT rules specifically
-sudo nft list table ip nat
 
-4. Check interface status
-ip link show
-ip addr show
 
-5. Check routing tables
-ip route show
-ip -6 route show
 
-6. Check if packets are being forwarded (view counters)
-sudo nft list chain inet filter forward
 
-7. Temporarily disable firewall for testing
-sudo nft flush ruleset
 
-8. Enable packet forwarding temporarily (if not set in sysctl.conf)
-sudo sysctl -w net.ipv4.ip_forward=1
-
-9. Add logging for debugging
-sudo nft add rule inet filter forward log prefix "FW-FWD: " accept
-
-10. View logs
-sudo journalctl -kf | grep "FW-FWD"
 
