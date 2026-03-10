@@ -101,6 +101,7 @@ zone "int.ws.kz" {
 zone "10.1.10.in-addr.arpa" {
     type master;
     file "/etc/bind/db.10.1.10";
+	allow-transfer { 10.1.10.10; 10.1.20.21; 10.1.20.22; };
 };
 
 zone "dmz.ws.kz" {
@@ -119,6 +120,12 @@ zone "20.1.10.in-addr.arpa" {
 zone "0.1.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
     type master;
     file "/etc/bind/db.2001.db8.1001.10";
+};
+
+zone "0.2.0.0.1.0.0.1.8.b.d.0.1.0.0.2.ip6.arpa" {
+    type slave;
+    file "/var/cache/bind/db.dmz.ipv6";
+    masters { 10.1.20.21; };
 };
 -------------------------------------------------------------------------
 3.4 Create Zone Files (int.ws.kz)
@@ -280,7 +287,7 @@ sudo nano /etc/resolv.conf
 
 nameserver 10.1.10.10
 nameserver 10.1.20.21
-nameserver 2001:db8:1111::10
+nameserver 2001:db8:1001:10::10
 search ext.ws.kz ws.kz
 
 sudo chattr +i /etc/resolv.conf

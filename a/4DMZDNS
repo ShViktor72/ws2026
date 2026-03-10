@@ -212,6 +212,7 @@ search int.ws.kz dmz.ws.kz
 # For DMZ network servers (mail, ha-prx*, web*)
 nameserver 10.1.20.21  
 nameserver 10.1.20.22  
+nameserver 2001:db8:1001:20::21
 search dmz.ws.kz int.ws.kz
 
 # For fw.ws.kz
@@ -336,3 +337,31 @@ dig @localhost dmz.ws.kz SOA +short
 dig @localhost web01.dmz.ws.kz +short
 dig @localhost -x 10.1.20.21 +short
 dig @localhost -x 2001:db8:1001:20::21 +short
+
+
+# from jamie-ws01
+nslookup int-srv01.int.ws.kz
+nslookup ha-prx01.dmz.ws.kz
+nslookup web01.dmz.ws.kz
+nslookup www.dmz.ws.kz
+nslookup 10.1.10.10
+nslookup 10.1.20.21
+nslookup 10.1.20.31
+nslookup 2001:db8:1001:10::10
+nslookup 2001:db8:1001:20::21
+nslookup 2001:db8:1001:20::31
+nslookup -type=SRV _ldap._tcp.auth.int.ws.kz
+nslookup auth.int.ws.kz
+nslookup ldap.int.ws.kz
+
+# from web01:
+nslookup web01.dmz.ws.kz
+nslookup web02.dmz.ws.kz
+nslookup ha-prx01.dmz.ws.kz
+nslookup int-srv01.int.ws.kz
+nslookup 10.1.20.31
+nslookup 10.1.20.32
+nslookup 10.1.10.10
+nslookup 2001:db8:1001:20::31
+nslookup 2001:db8:1001:20::32
+nslookup 2001:db8:1001:10::10
