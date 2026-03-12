@@ -1,18 +1,17 @@
 --------------------------------------------
 1. NETWORK INTERFACES AND HOSTNAME CONFIGURATION
 --------------------------------------------
-Debian 13 (VM environment with VirtualBox)
-All VMs have 4th interface (enp0s10) as bridge for internet access (setup only)
-All production interfaces must be configured according to Table 1
 -------------------------------------------------------------------------
-1.1 Initial System Update (using bridge interface enp0s10)
+check list:
 -------------------------------------------------------------------------
-# Update system packages (temporary internet access via bridge)
-sudo apt update
-sudo apt upgrade -y
+hostname
+software
+interfaces
+/etc/hosts
+/etc/resolv.conf
 
 -------------------------------------------------------------------------
-1.2 Hostname Configuration (must match Table 1 exactly)
+1.1 Hostname Configuration (must match Table 1 exactly)
 -------------------------------------------------------------------------
 # Example: For firewall server (fw.ws.kz)
 sudo hostnamectl set-hostname fw.ws.kz
@@ -30,28 +29,23 @@ ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 
 -------------------------------------------------------------------------
+
+1.2 Initial System Update (using bridge interface enp0s10)
+-------------------------------------------------------------------------
+# Update system packages (temporary internet access via bridge)
+sudo apt update
+sudo apt upgrade -y
+# all hosts:
+sudo apt install -y rsyslog net-tools
+# mail:
+sudo apt install -y mdadm
+# int-srv01, ha-prx01, ha-prx02.dmz.ws.kz:
+sudo apt install -y bind9 bind9utils 
+
+-------------------------------------------------------------------------
 1.3 Network Interface Naming Convention
 -------------------------------------------------------------------------
-VirtualBox typically uses:
-enp0s3 - internal network (first interface)
-enp0s8 - internal network (second interface)
-enp0s9 - internal network (third interface)
-enp0s10 - bridge mode for internet access (fourth interface) - SETUP ONLY
-Identify your interfaces
-ip link show
-
-
--------------------------------------------------------------------------
-Firewall (fw.ws.kz) Network Configuration
--------------------------------------------------------------------------
-# hostname
-sudo hostnamectl set-hostname fw.ws.kz
-
-# Verify hostname
-hostname
-
-
-# Interfaces
+# fw.ws.kz
 # open:
 sudo nano /etc/network/interfaces
 
@@ -95,44 +89,11 @@ sudo systemctl restart networking
 # check:
 ip a
 
-
-# hostname
-sudo nano /etc/hosts
-
-127.0.0.1       localhost
-127.0.1.1       fw.ws.kz fw
-
-# The following lines are desirable for IPv6 capable hosts
-::1     localhost ip6-localhost ip6-loopback
-ff02::1 ip6-allnodes
-ff02::2 ip6-allrouters
-
-
-# Nameserver config
-sudo nano /etc/resolv.conf
-
-# fw.ws.kz
-# nameserver 8.8.8.8
-nameserver 10.1.10.10
-nameserver 10.1.20.21
-nameserver 2001:db8:1001:10::10
-search ws.kz
-
-
-# soft
-sudo apt update
-sudo apt install -y nftables squid wireguard
--------------------------------------------------------------------------
-Internal Server (int-srv01.int.ws.kz) 
--------------------------------------------------------------------------
-# Interfaces
+# Internal Server (int-srv01.int.ws.kz) 
 # open:
 sudo nano /etc/network/interfaces
 
 # insert:
-auto lo
-iface lo inet loopback
-
 # INT 
 auto enp0s3 
 iface enp0s3 inet static
@@ -142,75 +103,6 @@ gateway 10.1.10.1
 iface enp0s3 inet6 static
 address 2001:db8:1001:10::10/64
 gateway 2001:db8:1001:10::1
-
-# internet Bridge interface 
-auto enp0s10 
-iface enp0s10 inet dhcp
-
-# restart 
-sudo systemctl restart networking
-
-# check:
-ip a
--------------------------------------------------------------------------
-DMZ Servers Network Configuration
--------------------------------------------------------------------------
-Example for mail.dmz.ws.kz:
-# open:
-sudo nano /etc/network/interfaces
-
-# insert:
-auto lo
-iface lo inet loopback
-
-# DMZ interface
-auto enp0s3 
-iface enp0s3 inet static
-address 10.1.20.10/24
-gateway 10.1.20.1
-
-iface enp0s3 inet6 static
-address 2001:db8:1001:20::10/64
-gateway 2001:db8:1001:20::1
-
-# internet Bridge interface 
-auto enp0s10
-iface enp0s10 inet dhcp
-
-# restart 
-sudo systemctl restart networking
-
-# check:
-ip a
-
-
-Similar for other DMZ servers with their respective IPs:
-ha-prx01.dmz.ws.kz: 10.1.20.21/24, 2001:db8:1001:20::21/64
-ha-prx02.dmz.ws.kz: 10.1.20.22/24, 2001:db8:1001:20::22/64
-web01.dmz.ws.kz: 10.1.20.31/24, 2001:db8:1001:20::31/64
-web02.dmz.ws.kz: 10.1.20.32/24, 2001:db8:1001:20::32/64
--------------------------------------------------------------------------
-Client Workstation (jamie-ws01.ext.ws.kz) Network Configuration
--------------------------------------------------------------------------
-# open:
-sudo nano /etc/network/interfaces
-
-# insert:
-auto lo
-iface lo inet loopback
-
-# WAN 
-auto enp0s3
-iface enp0s3 inet static
-address 1.1.1.20/24
-gateway 1.1.1.10 
-
-iface enp0s3 inet6 static
-address 2001:db8:1111::20/64
-
-# internet Bridge interface 
-auto enp0s10
-iface enp0s10 inet dhcp
 
 # restart 
 sudo systemctl restart networking
@@ -223,7 +115,7 @@ SOFTWARE
 -------------------------------------------------------------------------
 fw.ws.kz
 sudo apt update
-sudo apt install -y nftables squid wireguard rsyslog
+sudo apt install -y rsyslog
 
 int-srv01.int.ws.kz
 sudo apt install -y bind9 bind9utils slapd ldap-utils openssl samba smbclient curl rsyslog
@@ -231,8 +123,8 @@ sudo apt install -y bind9 bind9utils slapd ldap-utils openssl samba smbclient cu
 mail.dmz.ws.kz 
 sudo apt install -y postfix dovecot-core dovecot-imapd dovecot-ldap mdadm curl rsyslog
 
-ha-prx01.dmz.ws.kz
-sudo apt install -y bind9 bind9utils nginx keepalived ansible python3-venv curl rsyslog
+ha-prx01.dmz.ws.kz 
+sudo apt install -y bind9 bind9utils nginx keepalived ansible curl rsyslog
 
 ha-prx02.dmz.ws.kz
 sudo apt install -y bind9 bind9utils nginx keepalived rsyslog curl
@@ -261,27 +153,4 @@ From int-srv01:
 ping -c 3 10.1.10.1
 ping6 -c 3 2001:db8:1001:10::1
 
-From DMZ servers:
-ping -c 3 10.1.20.1
-ping6 -c 3 2001:db8:1001:20::1
 
-From jamie-ws01:
-ping -c 3 1.1.1.10
-ping6 -c 3 2001:db8:1111::10
-
-Test cross-network connectivity (after fw routing enabled)
-From int-srv01 to DMZ server:
-ping -c 3 10.1.20.10
-
-From jamie-ws01 to int-srv01:
-ping -c 3 10.1.10.10
-
-
--------------------------------------------------------------------------
-check list:
--------------------------------------------------------------------------
-hostname
-software
-interfaces
-/etc/hosts
-/etc/resolv.conf

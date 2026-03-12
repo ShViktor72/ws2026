@@ -5,16 +5,17 @@ sudo apt install -y rsyslog
 # Configure rsyslog to receive logs
 sudo nano /etc/rsyslog.conf
 
-# Receive logs via UDP and TCP
+# uncomment:
 module(load="imudp")
 input(type="imudp" port="514")
 
 module(load="imtcp")
 input(type="imtcp" port="514")
 
-# Save logs for each host to a separate file
+# # Add at the end:
 $template RemoteLogs,"/opt/logs/%HOSTNAME%.log"
 *.* ?RemoteLogs
+
 
 
 # Create a directory for logs
@@ -24,7 +25,7 @@ sudo mkdir -p /opt/logs
 sudo systemctl restart rsyslog
 
 # Check that it is listening on port 514
-sudo ss -tlnup | grep 514
+sudo netstat -tlnup
 
 -------------------------------------------------------------------------
 # On each client (mail, ha-prx01, ha-prx02, web01, web02, fw):

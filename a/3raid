@@ -1,0 +1,40 @@
+-------------------------------------------------------------------------
+Mail. Creating a disk array 
+-------------------------------------------------------------------------
+# Add two hard drives to the VM
+# View available drives
+lsblk
+
+# Install mdadm
+sudo apt install -y mdadm
+
+# Create RAID1
+sudo mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sdb /dev/sdc
+
+# Format
+sudo mkfs.ext4 /dev/md0
+
+# Mount point
+sudo mkdir -p /opt/backup
+
+# Get UUID
+sudo blkid /dev/md0
+
+# Add to fstab
+echo "UUID=YOUR_UUID  /opt/backup  ext4  defaults  0  2" | sudo tee -a /etc/fstab
+sudo mount -a
+
+# Save RAID config (autostart)
+sudo mdadm --detail --scan | sudo tee -a /etc/mdadm/mdadm.conf
+sudo update-initramfs -u
+
+# Verify
+df -h /opt/backup
+cat /proc/mdstat
+
+# Check after reboot:
+sudo reboot
+# after reboot:
+lsblk
+df -h /opt/backup
+cat /proc/mdstat
