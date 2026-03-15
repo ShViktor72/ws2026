@@ -1,79 +1,359 @@
-1 — IP адреса на всех хостах
-Первым делом на каждом хосте задать hostname и IP, без этого ничего не заработает:
-ХостIPDC110.10.0.10/24, GW 10.10.0.1NW-SRV10.10.0.11/24, GW 10.10.0.1FILE-SRV10.20.0.10/24, GW 10.20.0.1ALMA-ROUTER10.10.0.1, 10.20.0.1, 172.16.0.1, 20.0.0.2ASTA-ROUTER192.168.128.1, 30.0.0.2DC2192.168.128.10/17, GW 192.168.128.1
+Краткая инструкция — базовая настройка Windows Server 2022 
 
-2 — Маршрутизация (ALMA-ROUTER и ASTA-ROUTER)
-Пока нет маршрутизации — подсети не видят друг друга:
-ALMA-ROUTER:
-Установить роль Routing and Remote Access
-Включить маршрутизацию между:
-10.10.0.0/24
-10.20.0.0/24
-172.16.0.0/12
-Добавить статический маршрут до 192.168.128.0/17 через LA-ROUTER (20.0.0.1)
+#############################################
+сгенерировать новый SID через sysprep:
+#############################################
+C:\Windows\System32\Sysprep\sysprep.exe
+
+В окне sysprep:
+System Cleanup Action: Enter System Out-of-Box Experience (OOBE)
+✅ Generalize
+Shutdown Options: Reboot
+
+
+#############################################
+Базовая настройка Windows Server 2022 
+#############################################
+1 — Hostname
+
+Открыть Server Manager (запускается автоматически)
+Нажать на Local Server в левой панели
+Нажать на текущее имя компьютера (синяя ссылка)
+Откроется sysdm.cpl
+Change → ввести имя → OK
+Restart Later
+
+
+2 — IP адрес
+
+Server Manager → Local Server
+Нажать на Ethernet (синяя ссылка)
+Откроется ncpa.cpl
+Правой кнопкой на адаптер → Properties
+Двойной клик на IPv4
+Заполнить IP, маску, шлюз, DNS
+OK → Close
+
+
+3 — Отключить Firewall
+
+Server Manager → Local Server
+Нажать на Windows Defender Firewall (синяя ссылка)
+Turn Windows Defender Firewall on or off
+Все три профиля → Turn off
+OK
+
+Отключить Firewall на Windows Server Core:
+netsh advfirewall set allprofiles state off
+
+
+
+#############################################
+Установить роль Routing
+#############################################
+•	Server Manager → Manage → Add Roles and Features
+•	Server Roles → ✅ Remote Access → Next
+•	Role Services → ✅ Routing → Add Features → Install
+•	Tools → Routing and Remote Access
+•	Правой кнопкой на сервер → Configure and Enable
+•	Custom configuration → ✅ LAN routing → Finish → Start Service
+
+5 — Добавить статические маршруты
+•	Server Manager → Tools
+•	Routing and Remote Access
+•	Раскрыть сервер → IPv4 → Static Routes
+•	Правой кнопкой → New Static Route
+•	Заполнить:
+Interface:   (нужный интерфейс)
+Destination: 192.168.128.0
+Netmask:     255.255.128.0
+Gateway:     20.0.0.1
+Metric:      1
+•	OK
+
+#############################################
+Настройка DC1, DC2 — AD DS + DNS
+#############################################
+DC1:
+1 — Установить роль AD DS
+Server Manager → Manage → Add Roles and Features
+Next → Next → Next
+Server Roles → ✅ Active Directory Domain Services
+Add Features → Next → Next → Next
+Install
+Дождаться завершения → Close
+
+2 — Создать домен
+Нажать жёлтый флажок ⚠️ вверху
+Promote this server to a domain controller
+
+3 — Мастер настройки
+Deployment Configuration:
+-✅ Add a new forest
+-Root domain name: alma.local
+-Next
+Domain Controller Options:
+-Forest functional level: Windows Server 2016
+-Domain functional level: Windows Server 2016
+-✅ DNS server
+-✅ Global Catalog
+-DSRM Password: password
+-Next
+DNS Options: Игнорировать предупреждение → Next
+Additional Options:
+-NetBIOS name: ALMA
+-Next
+Paths: Оставить по умолчанию → Next
+Review Options: Next
+Prerequisites Check:
+-Дождаться зелёной галочки
+-Install
+
+4 — После перезагрузки войти:
+Username: ALMA\Administrator
+Password: password
+
+DC2 создаёт дочерний домен, а не новый лес.
+На DC2 в мастере AD DS:
+Deployment Configuration:
+✅ Add a new domain to an existing forest
+Domain type: Child Domain
+Parent domain name: alma.local
+New domain name: asta
+
+В окне Change:
+administrator@alma.local
+password
+
+
+После установки поменять настройки DNS:
+DC2: 
+192.168.128.10  
+10.10.0.10
 ASTA-ROUTER:
-Установить роль Routing and Remote Access
-Включить маршрутизацию для 192.168.128.0/17
-Добавить статический маршрут до 10.10.0.0/24 и 172.16.0.0/12 через LA-ROUTER (30.0.0.1)
+192.168.128.10 
+10.10.0.10
 
-3 — DNS на DC1
-Без DNS не поднять AD, не присоединить серверы к домену:
-Установить роль DNS
-Создать основную зону alma.local
-Создать обратную зону для 10.10.0.x и 10.20.0.x
-Добавить A-записи:
-dc1 → 10.10.0.10
-nw-srv → 10.10.0.11
-file-srv → 10.20.0.10
-www → 10.20.0.10
-app → 10.10.0.11
-external → (пока пусто)
-help → (пока пусто)
 
-4 — Active Directory на DC1
-После DNS можно поднимать AD:
-Установить роль AD DS
-Создать лес и домен alma.local
-DC1 автоматически становится основным DNS сервером домена
+#############################################
+Маршрутизация — ALMA-ROUTER и ASTA-ROUTER
+#############################################
+ALMA-ROUTER
+1 — Установить роль Routing:
 
-5 — Присоединить серверы к домену alma.local
-Теперь когда есть AD и DNS:
-NW-SRV → присоединить к alma.local
-FILE-SRV → присоединить к alma.local
-ALMA-ROUTER → присоединить к alma.local
+Server Manager → Manage → Add Roles and Features
+Server Roles → ✅ Remote Access
+Role Services → ✅ Routing → Add Features
+Install → дождаться → Close
 
-6 — DHCP на NW-SRV
-После вступления в домен настроить DHCP:
-Установить роль DHCP
-Создать scope:
-Подсеть 172.16.0.0/12
-Диапазон 172.16.1.0 – 172.31.255.255
-Шлюз 172.16.0.1
-DNS 10.10.0.10 (DC1) и 10.10.0.11 (NW-SRV)
-Аренда 8 дней 12 часов 25 минут
-Авторизовать DHCP сервер в домене
+2 — Настроить RRAS:
 
-7 — DHCP на ASTA-ROUTER
-Установить роль DHCP
-Создать scope:
-Подсеть 192.168.128.0/17
-Диапазон от конца — минимум 500 адресов
-Шлюз 192.168.128.1
-DNS 192.168.128.10 (DC2)
-Аренда 8 дней 12 часов 25 минут
+Server Manager → Tools → Routing and Remote Access
+Правой кнопкой на сервер → Configure and Enable Routing and Remote Access
+Next → Custom configuration → Next
+✅ LAN routing → Next → Finish
+Start Service
 
-8 — AD DS на DC2
-Установить роль AD DS и DNS
-Создать дочерний домен asta.alma.local
-Убедиться что DC2 видит DC1 через маршрутизацию
+3 — Добавить маршрут до ASTA:
 
-9 — Клиентские машины
-Теперь клиенты могут получить IP и вступить в домен:
-WIN-CLIENT1 → DHCP от NW-SRV → домен alma.local
-WIN-CLIENT2 → DHCP от ASTA-ROUTER → домен asta.alma.local
+RRAS → IPv4 → правой кнопкой Static Routes → New Static Route
 
-10 — VPN между ALMA и ASTA
-После того как оба домена работают:
-Настроить IKEv2 IPSec туннель ALMA-ROUTER ↔ ASTA-ROUTER
-PSK: AllTooWell13@
-Проверить связность всех подсетей
+Destination: 192.168.128.0
+Netmask:     255.255.128.0
+Gateway:     20.0.0.1
+Metric:      1
+
+OK
+
+
+ASTA-ROUTER
+1 — Установить роль Routing:
+Те же шаги что и ALMA-ROUTER
+
+2 — Настроить RRAS:
+Те же шаги что и ALMA-ROUTER
+
+3 — Добавить маршруты до ALMA:
+RRAS → IPv4 → Static Routes → New Static Route
+
+Маршрут 1:
+Destination: 10.10.0.0
+Netmask:     255.255.255.0
+Gateway:     30.0.0.1
+Metric:      1
+Маршрут 2:
+Destination: 10.20.0.0
+Netmask:     255.255.255.0
+Gateway:     30.0.0.1
+Metric:      1
+Маршрут 3:
+Destination: 172.16.0.0
+Netmask:     255.240.0.0
+Gateway:     30.0.0.1
+Metric:      1
+Маршрут 4:
+Destination: 20.0.0.0
+Netmask:     255.255.255.252
+Gateway:     30.0.0.1
+Metric:      1
+
+Проверка связности:
+С ALMA-ROUTER:
+ping 20.0.0.1
+ping 30.0.0.2
+ping 192.168.128.10
+С ASTA-ROUTER:
+ping 30.0.0.1
+ping 20.0.0.2
+ping 10.10.0.10
+
+
+#############################################
+Добавляем серверы в домен
+#############################################
+Порядок вступления в домен:
+1. NW-SRV (через консоль Core):
+sconfig → 1 → D
+Domain: alma.local
+User: Administrator
+Password: password
+Restart → Yes
+
+#############################################
+FILE-SRV, ALMA-ROUTER 
+Открыть Server Manager
+Нажать Local Server в левой панели
+Нажать на имя компьютера (синяя ссылка FILE-SRV)
+Изменить домен
+Откроется окно System Properties
+Нажать Change
+Выбрать Domain
+Ввести: alma.local
+Нажать OK
+
+Ввести credentials
+Username: Administrator
+Password: password
+OK
+
+Перезагрузить
+Появится сообщение Welcome to the alma.local domain
+OK → OK
+Restart Now
+
+
+#############################################
+Установить DHCP
+#############################################
+На ASTRA-ROUTER:
+сначала вступить в домен
+Server Manager → Local Server
+Нажать на имя компьютера
+Change → Domain → asta.alma.local
+Username: administrator@asta.alma.local
+Password: password
+Restart
+
+Установить DHCP:
+•	Server Manager → Manage → Add Roles and Features
+•	Server Roles → ✅ DHCP Server → Install
+•	Жёлтый флажок ⚠️ → Complete DHCP configuration → Authorize → Commit
+
+Создать DHCP Scope:
+•	Server Manager → Tools → DHCP
+•	IPv4 → правой кнопкой → New Scope
+•	Заполнить:
+Name:     Alma_Clients
+Start IP: 192.168.128.100
+End IP:   192.168.255.100
+Mask:     255.255.128.0
+Lease:    8 дней 12 часов 25 минут
+Gateway:  192.168.128.1
+DNS:      192.168.128.1
+         
+•	Activate → Yes → Finish
+
+#############################################
+NW-SRV через ALMA-ROUTER
+
+
+
+
+
+#############################################
+Настроить DHCP Relay на ALMA-ROUTER
+Server Manager → Tools → Routing and Remote Access
+Раскрыть сервер → IPv4
+Правой кнопкой на General → New Routing Protocol
+Выбрать DHCP Relay Agent → OK
+Правой кнопкой на DHCP Relay Agent → New Interface
+Выбрать интерфейс 172.16.0.1 → OK → OK
+Правой кнопкой на DHCP Relay Agent → Properties
+Ввести IP: 10.10.0.11 → Add → OK
+
+Проверить WIN-CLIENT1
+На WIN-CLIENT1 открыть Network and Sharing Center
+Change adapter settings
+Правой кнопкой на адаптер → Disable
+Правой кнопкой → Enable
+Проверить полученный IP
+Должен получить:
+IP:      172.16.x.x
+Gateway: 172.16.0.1
+DNS:     10.10.0.10
+
+
+
+#############################################
+ANSIBLE-SRV — git init и коммит
+#############################################
+нужно:
+Инициализировать git репозиторий в /opt/ansible/
+Создать git коммит с сообщением "окончательная фиксация"
+
+Войти на ANSIBLE-SRV
+bashlogin: user
+password: Skill39!
+
+Перейти в папку
+bashcd /opt/ansible/
+
+Инициализировать git
+git init
+
+Настроить git (имя и email)
+git config --global user.name "Admin"
+git config --global user.email "admin@alma.local"
+
+Добавить все файлы
+git add .
+
+Создать коммит
+bashgit commit -m "окончательная фиксация"
+
+Проверить:
+git log
+
+Должно показать:
+commit xxxxxxx
+Author: Admin <admin@alma.local>
+Date:   ...
+    окончательная фиксация
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
